@@ -10,4 +10,4 @@
 - Кастомизация интерфейса скрипта
 
 # Установка
-- Файл [samp.lua](https://github.com/riverya4life/SAMPFixer/blob/main/samp.lua) и папки [resource](https://github.com/riverya4life/SAMPFixer/tree/main/resource)(с использованием [fAwesome 6](https://www.blast.hk/threads/111224/) данная папка не обязательна к установке) и [lib](https://github.com/riverya4life/SAMPFixer/tree/main/lib) поместить в папку moonloader (если требует заменить - заменяйте)
+- Файл [!.lunarisprjkt.lua](https://github.com/riverya4life/SAMPFixer/blob/main/samp.lua) и папки [resource](https://github.com/riverya4life/SAMPFixer/tree/main/resource)(с использованием [fAwesome 6](https://www.blast.hk/threads/111224/) данная папка не обязательна к установке) и [lib](https://github.com/riverya4life/SAMPFixer/tree/main/lib) поместить в папку moonloader (если требует заменить - заменяйте)
