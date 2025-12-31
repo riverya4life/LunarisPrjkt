@@ -1,7 +1,11 @@
+---@diagnostic disable:lowercase-global
+assert(getMoonloaderVersion() ~= "026", ("%s requires MoonLoader v0.26 or higher!"):format(thisScript().name));
+
 script_name = "[LunarisPrjkt]"
 script_author = "riverya4life."
-script_version(0.85)
-script_properties('work-in-pause')
+script_version(0.90)
+script_version_number(0.90)
+script_properties("work-in-pause")
 
 --==================================== [ Information for Users or scripters ] ====================================--
 --[[ Thanks to Black Jesus for cleo GameFixer 2.0 and Gorskin for lua GameFixer 3.1 (memory addresses) 
@@ -17,20 +21,10 @@ Please do not write to the author for help.
 
 --==[ REQUIREMENTS ]==--
 
-local _require = require
-local require = function(moduleName, url)
-	local ffi = require("ffi")
-    local status, module = pcall(_require, moduleName)
-    if status then return module end
-    local response = ffi.C.MessageBoxA(ffi.cast('void*', readMemory(0x00C8CF88, 4, false)), ('Библиотека "%s" не найдена.%s'):format(moduleName, url and '\n\nОткрыть страницу загрузки?' or ''), thisScript().name, url and 4 or 0)
-    if response == 6 then
-        os.execute(('explorer "%s"'):format(url))
-    end
-end
-
 local sampev = require("lib.samp.events")
 local memory = require("memory")
 local samp = require("samp.events")
+local RakLua = require("RakLua")
 local vkeys = require("vkeys")
 local rkeys = require("rkeys")
 local imgui = require("mimgui")
@@ -40,11 +34,11 @@ local encoding = require("encoding")
 local fa = require("fAwesome6")
 local ffi = require("ffi")
 local weapons = require("lib.game.weapons")
---local hui = require("lib.riverya.hui", "https://google.com")
+
+imgui.HotKey = require("mimhot").HotKey
 
 encoding.default = 'CP1251'
 u8 = encoding.UTF8
-imgui.HotKey = require("mimhot").HotKey
 
 ------------------------[ конфиг нахуй блять ] -------------------
 
@@ -61,7 +55,7 @@ local defaultConfig = {
         noeffects = false, alphamap = 255, separate_msg = true, vsync = false,
         recolorer = false, language = 1, moneyfontstyle = 3, menufontstyle = 0,
         menuallfontstyle = 2, bindkeys = false, smilesystem = false, gender = 0,
-        camhack = false, riveryahellomsg = true, rpguns = false,
+        camhack = false, riveryahellomsg = true, rpguns = false, fisheye = false
     },
     hphud = {
         active = false, text = 3, style = 1, pos = 2, mode = 1,
@@ -79,7 +73,7 @@ local defaultConfig = {
         blurradius = 0.5,
     },
     cleaner = {
-        limit = 512, autoclean = true, cleaninfo = true,
+        limit = 512, autoclean = true, cleaninfo = true, streamupdate = false,
     },
     nop_samp_keys = {
         key_F1 = false, key_F4 = false, key_F7 = false, key_T = false, key_ALTENTER = false,
@@ -88,11 +82,11 @@ local defaultConfig = {
         openmenu = "/riverya", animmoney = "/animmoney", shownicks = "/shownicks",
         showhp = "/showhp", gameradio = "/gameradio", delgun = "/delgun",
         clearchat = "/clearchat", showchat = "/showchat", showhud = "/showhud",
-        dialogstyle = "/dialogstyle",
+        dialogstyle = "/dialogstyle", cleanmemory = "/cleanmemory",
     },
     hotkeys = {
         openmenukey = "[113]",
-    }
+    },
 }
 
 local ini = inicfg.load(defaultConfig, directIni)
@@ -109,22 +103,22 @@ end
 
 local new, str, sizeof = imgui.new, ffi.string, ffi.sizeof
 local tLastKeys = {}
-local ActOpenMenuKey = {
-	v = decodeJson(ini.hotkeys.openmenukey)
-}
+local ActOpenMenuKey = { v = decodeJson(ini.hotkeys.openmenukey) }
 
 local dragging = false
 local dragX, dragY = 0, 0
 local CDialog, CDXUTDialog = 0, 0
+
 local onspawned = false
 local offspawnchecker = true
-local gscreen = false
-local bscreen = false
 local showtextdraw = false
 local updatesavaliable = false
 local MAX_SAMP_MARKERS = 63
 local unload_chathider = false
 local state = false
+
+local id = nil
+local screens = { green = false, black = false }
 
 -- Описание персонажа by Cosmo (https://www.blast.hk/threads/84975/)
 local active = nil
@@ -132,10 +126,67 @@ local pool = {}
 local no_description_text = "* Описание отсутствует *"
 
 -- Homeless Flies by Chapo
-local bums = { 77, 78, 79, 134, 135, 137, 212, 230, 239 }
 local bums_pool = {}
+local bums = { 77, 78, 79, 134, 135, 137, 212, 230, 239 }
 
 local sw, sh = getScreenResolution()
+
+local bi = false
+local antiafk = false
+
+local notifications = {}
+
+local tabs = {
+	fa.HOUSE..u8'\tГлавная', 
+	fa.DESKTOP..u8'\tBoost FPS', 
+	fa.GEAR..u8'\tИсправления', 
+	fa.ICONS..u8'\tПрочее',
+	fa.BOOK..u8'\tКоманды', 
+	fa.BARS..u8'\tНастройки',
+}
+local tab = new.int(1)
+
+local tbmtext = {
+    u8"Без анимации",
+    u8"Быстрая",
+    u8"Стандартная",
+}
+local tmtext = new['const char*'][#tbmtext](tbmtext)
+local ivar = new.int(ini.main.animmoney-1)
+
+local textscount = 0
+
+local arr_gender = {
+	fa.PERSON_SIMPLE..u8" Мужской", 
+	fa.PERSON_DRESS_SIMPLE..u8" Женский",
+}
+local genders = new['const char*'][#arr_gender](arr_gender)
+local gender = new.int(ini.main.gender)
+
+local book_text = {}
+
+local ICON_STYLE_KEYS = {"solid", "regular"}
+local ICON_STYLE_NAMES = {["solid"] = "Стандарт", ["regular"] = "Контурные"}
+local iconstyle = new.int(ini.themesetting.iconstyle)
+
+function get_memory()
+    local function round(num, idp)
+        local mult = 10 ^ (idp or 0)
+        return math.floor(num * mult + 0.5) / mult
+    end
+    return round(memory.read(0x8E4CB4, 4, true) / 1048576, 1)
+end
+
+-- [ memory funcs (fix for moonloader v. 0.27)]
+function memory_getfloat(adr, prot)
+    return representIntAsFloat(readMemory(adr, 4, prot))
+end
+
+function memory_setfloat(adr, value, prot)
+    return writeMemory(adr, 4, representFloatAsInt(value), prot)
+end
+
+----------------------------------- Хуйня для мимгуи -----------------------------------
 
 local sliders = {
 	weather = new.int(ini.main.weather),
@@ -194,6 +245,7 @@ local checkboxes = {
     --------------------------------------------------
     cleaninfo = new.bool(ini.cleaner.cleaninfo),
     autoclean = new.bool(ini.cleaner.autoclean),
+    streamupdate = new.bool(ini.cleaner.streamupdate),
     --------------------------------------------------
     foggyness = new.bool(ini.main.foggyness),
 }
@@ -208,81 +260,8 @@ local buffers = {
 	cmd_showchat = new.char[64](ini.commands.showchat),
 	cmd_showhud = new.char[64](ini.commands.showhud),
 	cmd_dialogstyle = new.char[64](ini.commands.dialogstyle),
+    cmd_cleanmemory = new.char[64](ini.commands.cleanmemory),
 }
-
-local bi = false
-local antiafk = false
-
-notifications = {}
-
-local item_list = {
-	u8"Синяя", 
-	u8"Красная", 
-	u8"Коричневая", 
-	u8"Аква", 
-	u8"Черная", 
-	u8"Фиолетовая", 
-	u8"Черно-оранжевая", 
-	u8"Серая", 
-	u8"Вишневая", 
-	u8"Зеленая", 
-	u8"Пурпурная", 
-	u8"Темно-зеленая", 
-	u8"Оранжевая",
-    u8"Градиент"
-}
-local ImItems = new['const char*'][#item_list](item_list)
-local int_item = new.int(ini.themesetting.theme-1)
-
-local tabs = {
-	fa.HOUSE..u8'\tГлавная', 
-	fa.DESKTOP..u8'\tBoost FPS', 
-	fa.GEAR..u8'\tИсправления', 
-	fa.ICONS..u8'\tПрочее',
-	fa.BOOK..u8'\tКоманды', 
-	fa.BARS..u8'\tНастройки',
-}
-local tab = new.int(1)
-
-local tbmtext = {
-    u8"Без анимации",
-    u8"Быстрая",
-    u8"Стандартная",
-}
-local tmtext = new['const char*'][#tbmtext](tbmtext)
-local ivar = new.int(ini.main.animmoney-1)
-
-local textscount = 0
-
-local arr_gender = {
-	u8"Мужской", 
-	u8"Женский",
-}
-local genders = new['const char*'][#arr_gender](arr_gender)
-local gender = new.int(ini.main.gender)
-
-local book_text = {}
-
-local ICON_STYLE_KEYS = {"solid", "regular"}
-local ICON_STYLE_NAMES = {["solid"] = "Стандарт", ["regular"] = "Контурные"}
-local iconstyle = new.int(ini.themesetting.iconstyle)
-
-function get_memory()
-    local function round(num, idp)
-        local mult = 10 ^ (idp or 0)
-        return math.floor(num * mult + 0.5) / mult
-    end
-    return round(memory.read(0x8E4CB4, 4, true) / 1048576, 1)
-end
-
--- [ memory funcs (fix for moonloader v. 0.27)]
-function memory_getfloat(adr, prot)
-    return representIntAsFloat(readMemory(adr, 4, prot))
-end
-
-function memory_setfloat(adr, value, prot)
-    return writeMemory(adr, 4, representFloatAsInt(value), prot)
-end
 
 local imguiCheckboxesFixesAndPatches = {
     [u8"Исправление крови при повреждении дерева"] = {var = checkboxes.fixbloodwood, cfg = "fixbloodwood", fnc = "FixBloodWood"},
@@ -311,53 +290,32 @@ local imguiInputsCmdEditor = {
     [u8"Показать/скрыть чат"] = {var = buffers.cmd_showchat, cfg = "showchat"},
     [u8"Показать/скрыть HUD"] = {var = buffers.cmd_showhud, cfg = "showhud"},
     [u8"Новый цвет диалоговых окон"] = {var = buffers.cmd_dialogstyle, cfg = "dialogstyle"},
+    [u8"Очистка памяти"] = {var = buffers.cmd_cleanmemory, cfg = "cleanmemory"},
 }
 
+----------------------------------- Хуйня для мимгуи -----------------------------------
+
 local listUpdate = {
-
 	{
-        v = 'Beta v. 0.85',
-        context = "- Добавлен патч, который позволяет садится на корточки с любым оружием\n- Исправление системы обновления\n- Система смайлов и биндов помещены в отдельные окна\n- Добавлена система отыгровок оружия\n- Добавлен патч с фотоаппаратом при отключенной пост-обработке\n- Убран лишний мусор с кода"
-    },
-
-    {
-        v = 'Beta v. 0.8',
-        context = "- Добавлены анимации 2-х минутного бездействия как в одиночной игре\n- Добавлена пасхалка в самом меню\n- Добавлена система смайлов, бинды, немного изменена кастомизация\n- Возвращены названия улиц и районов\n- Обновлена система автообновлений (теперь обновление будет скачано после того как нажмете кнопку 'Обновить')\n- Добавлен лог обновлений\n- Фиксы мелких багов"
-    },
-
-    {
-        v = 'Beta v. 0.7',
-        context = "- Скрипт переписан с Imgui на Mimgui для оптимизации\n- Добавлено удобное меню с функциями, по типу FPS UP, кастомизация интерфейса, изменение команд скрипта и т.д.\n- Была проведена чистка кода\n- Добавлен gotofunc by Gorskin\n- Добавлена функция разделения длинного сообщения в чат на два by Gorskin\n- Много фиксов"
-    },
-
-    {
-        v = 'Beta v. 0.6',
-        context = "- Добавлено скрытие описания by Cosmo\n- Автообновление\n- Добавлена проверка на автора\n- Вывод текста в чат только после того, как игрок подключится к серверу\n- Скрипт переписан на Imgui"
-    },
-
-    {
-        v = 'Beta v. 0.5',
-        context = "- Фикс конфигурации v.2\n- Добавлена возможность изменять цвет диалоговых окон\n- Был добавлен патч радара в слежке\n- Диалоговые окна теперь можно перемещать по экрану\n- Было добавлено скрытие пароля от банковской карты и кода складских помещений"
-    },
-
-    {
-        v = 'Beta v. 0.4',
-        context = "- Фикс конфигурации"
-    },
-
-    {
-        v = 'Beta v. 0.3',
-        context = "- Исправление блок. клавиш Alt + Enter, который вызывал краш у многих\n- Добавление патча, который позволял запускать игру за считанные секунды"
-    },
-
-    {
-        v = 'Beta v. 0.2',
-        context = "- Исправлены диалоги\n- Изменены адреса памяти\n- Оптимизация\n- Еще фиксы чего-то"
-    },
-
-    {
-        v = 'Beta v. 0.1',
-        context = "- Запуск бета-теста скрипта"
+        v = "Beta v. 0.85",
+        context = {
+            u8"Change Log | Список изменений:",
+            fa.PLUS..u8" Добавлен транслятор команд на кириллице (.ьь -> /mm)",
+            fa.PLUS..u8" Функции SetClassSelectionColors и setDialogColor была объединена в setWindowColors.",
+            fa.PLUS..u8" Добавлен LoadPatch и onSystemInitialized.",
+            fa.MINUS..u8" Временно вырезана локализация клиента сампа (поддержка с R1 до R5)",
+            fa.PLUS..u8" Добавлен NormalDapo Fix, а именно onSendGiveDamage.\nthx Therion: (blast.hk/threads/13892/post-563286)\nthx asdzxcjqwe: (blast.hk/threads/18162/post-563373)\nthx CaJlaT: (blast.hk/threads/13892/post-563639)",
+            fa.PLUS..u8" Вспывающие уведомления (теперь они отображаются без открытого меню как раньше)",
+            fa.PLUS..u8" Добавлен Homeless Flies (летающие мухи) от Chapo.",
+            fa.PLUS..u8" Теперь при очистке памяти можно выбирать: очищать зону стрима или нет.",
+            fa.PLUS..u8" Добавлена опция, при включении которой будет вечно гуляющий туман вне зависимости от погодных условий.",
+            fa.PLUS..u8" Немного изменённое меню! Особенно заметно в меню "..tabs[4].."!\n\n",
+            fa.CODE..u8" Оптимизация onShowDialog.",
+            fa.CODE..u8" Была проведена чистка FFI cdef.",
+            fa.CODE..u8" Переписан gotofunc.",
+            fa.CODE..u8" Добавлен getChatCommands для получения команд.",
+            fa.CODE..u8" Обновлена пасхалка...",
+        },
     },
 }
 
@@ -384,8 +342,11 @@ function get_samp_version()
 end
 
 function setWindowColors(window_type, l_up, r_up, l_low, r_bottom)
-    -- class_selection: SetClassSelectionColors by ARMOR (https://www.blast.hk/threads/13380/post-1104630)
-    -- dialog: setDialogColor by stereoliza (Heroku) (https://www.blast.hk/threads/13380/post-621933)
+    -- window_type - Array:
+    -- # str class_selection: SetClassSelectionColors by ARMOR (https://www.blast.hk/threads/13380/post-1104630)
+    -- # str dialog: setDialogColor by stereoliza (Heroku) (https://www.blast.hk/threads/13380/post-621933)
+    -- colors [default color: 0xCC000000]:
+    -- # l_up - left up, r_up - right up, l_low - left low, r_bottom - right bottom
     local memhuy = {
         dialog = { r1 = 0x21A0B8, r2 = 0x21A0B8, r3 = 0x26E898, r4 = 0x26E9C8, dl = 0x2AC9E0 },
         class_selection = { r1 = 0x21A18C, r2 = 0x21A194, r3 = 0x26E974, r4 = 0x26EAA4, dl = 0x2ACABC }
@@ -417,6 +378,7 @@ function OffChatBack()
 	end
 	memory.fill(getModuleHandle("samp.dll") + memhuy, 0x90, 5, true)
 end
+
 ------------------------------------------ [анимация бездействия by vegas~ (https://www.blast.hk/threads/151523/)]
 local player = {
     mainTime = 0,
@@ -517,7 +479,6 @@ local riveryabook = { state = false, duration = 0.4555 }
 setmetatable(riveryabook, ui_meta)
 
 CloseButton = function(str_id, value, rounding) -- by Gorskin (edit) (https://www.blast.hk/members/157398/)
-	--ini.themesetting.rounded = sliders.roundtheme[0]
 	size = size or 20
 	rounding = ini.themesetting.rounded
 	local DL = imgui.GetWindowDrawList()
@@ -671,9 +632,24 @@ end
 ------------------------------------------ [FFI cdef] ---------------------------
 
 ffi.cdef [[
-    struct std_string { union { char buf[16]; char* ptr; }; unsigned size; unsigned capacity; };
-    struct stCommandInfo { struct std_string name; int type; void* owner; };
-    struct std_vector_stCommandInfo{ struct stCommandInfo* first; struct stCommandInfo* last; struct stCommandInfo* end; };
+    struct std_string { 
+        union { 
+            char buf[16]; 
+            char* ptr; 
+        }; 
+        unsigned size; 
+        unsigned capacity; 
+        };
+    struct stCommandInfo { 
+        struct std_string name; 
+        int type; 
+        void* owner; 
+    };
+    struct std_vector_stCommandInfo { 
+        struct stCommandInfo* first; 
+        struct stCommandInfo* last; 
+        struct stCommandInfo* end; 
+    };
 
 	typedef unsigned long HANDLE;
 	typedef HANDLE HWND;
@@ -708,18 +684,23 @@ local rcClip, rcOldClip = ffi.new('RECT'), ffi.new('RECT')
 ------------------------------------------ [FFI cdef] ---------------------------
 
 function riveryahello()
+    local currentVersion = thisScript().version
+    local lastver = update():getLastVersion()
+
     if ini.main.riveryahellomsg then
         local openMenuKey = table.concat(rkeys.getKeysName(ActOpenMenuKey.v), " + ")
-        sampAddChatMessage(string.format("%s{FFFFFF} Загружен! Открыть меню: {dc4747}%s{FFFFFF} или {dc4747}%s. {FFFFFF}Автор: {dc4747}%s", 
-            script_name, openMenuKey, ini.commands.openmenu, script_author), 0x73b461)
+        sampAddChatMessage(
+            string.format(
+                "%s{FFFFFF} Загружен! Открыть меню: {dc4747}%s{FFFFFF} или {dc4747}%s. {FFFFFF}Автор: {dc4747}%s", 
+                script_name, openMenuKey, ini.commands.openmenu, script_author
+            ), 
+            0x73b461
+        )
     end
 
-    local lastver = update():getLastVersion()
-    if thisScript().version < lastver then
-        updatesavaliable = true
+    updatesavaliable = currentVersion < lastver
+    if updatesavaliable then
         addOneOffSound(0, 0, 0, 1058)
-    elseif thisScript().version > lastver then
-        updatesavaliable = false
     end
 end
 
@@ -739,8 +720,8 @@ function main()
     OffChatBack()
     
 	-- rp guns by Gorskin --------------------
-	rp_thread = lua_thread.create_suspended(rp_weapons)
-    rp_thread:run()
+	rp_guns_thread = lua_thread.create_suspended(rp_weapons)
+    rp_guns_thread:run()
 	-- rp guns by Gorskin --------------------
 	
 	local duration = 0.3 -- Описание персонажа by Cosmo (https://www.blast.hk/threads/84975/)
@@ -764,15 +745,19 @@ function main()
         end
     end
 
-    addEventHandler('onWindowMessage', function(msg, wparam, lparam)
+    addEventHandler("onWindowMessage", function(msg, wparam, lparam)
         if (riverya.state or riveryabook.state) and (msg == 0x100 or msg == 0x101) and wparam == vkeys.VK_ESCAPE and not (isPauseMenuActive() or isGamePaused()) then
             consumeWindowMessage(true, false)
             if msg == 0x101 then
                 (riverya.state and riverya or riveryabook).switch()
             end
-        elseif ini.nop_samp_keys.key_ALTENTER and msg == 261 and wparam == 13 then
+        end
+
+        if ini.nop_samp_keys.key_ALTENTER and msg == 261 and wparam == 13 then
             consumeWindowMessage(true, true)
-        elseif sampIsDialogActive() then
+        end
+
+        if sampIsDialogActive() then
             if msg == wm.msg.WM_LBUTTONDOWN then
                 local curX, curY = getCursorPos()
                 local x, y = sampGetDialogPos()
@@ -790,6 +775,15 @@ function main()
                 sampSetDialogPos(curX + dragX, math.min(math.max(curY + dragY, -15), scrY - 15))
             end
         end
+        --------------------- [ dual monitor fix] --------------
+        if msg == wm.WM_KILLFOCUS then
+			ffi.C.GetClipCursor(rcOldClip);
+			ffi.C.ClipCursor(rcOldClip);
+		elseif msg == wm.WM_SETFOCUS then
+			ffi.C.GetWindowRect(ffi.C.GetActiveWindow(), rcClip);
+			ffi.C.ClipCursor(rcClip);
+        end
+		--------------------------------------------------------
     end)
 
     while true do
@@ -821,10 +815,10 @@ function main()
         
         local chatstring = sampGetChatString(99)
         local disconnectMessages = {
-            ["Server closed the connection."] = true,
-            ["You are banned from this server."] = true,
-            ["Сервер закрыл соединение."] = true,
-            ["Вы забанены на этом сервере."] = true
+            "Server closed the connection.",
+            "You are banned from this server.",
+            "Сервер закрыл соединение.",
+            "Вы забанены на этом сервере."
         }
         if disconnectMessages[chatstring] then
             sampDisconnectWithReason(false)
@@ -838,20 +832,11 @@ function main()
 			if isCharInCar(PLAYER_PED, car) then
 				speed = getCarSpeed(car)
 				if speed >= 120.0 then
-					shakeCam(1.0)
+					shakeCam(2.5)
 				end
 			end
 		end
 		
-		--------------------- [ dual monitor fix] --------------
-		if msg == wm.WM_KILLFOCUS then
-			ffi.C.GetClipCursor(rcOldClip);
-			ffi.C.ClipCursor(rcOldClip);
-		elseif msg == wm.WM_SETFOCUS then
-			ffi.C.GetWindowRect(ffi.C.GetActiveWindow(), rcClip);
-			ffi.C.ClipCursor(rcClip);
-		end
-		--------------------------------------------------------
         ---------------- -- прицел на транспорте by Cosmo (https://www.blast.hk/threads/72683/)
 		if isCharInAnyCar(playerPed) then
 			local car = storeCarCharIsInNoSave(playerPed)
@@ -982,6 +967,7 @@ function main()
 		if ini.main.blockweather == true and memory.read(0xC81320, 2, true) ~= ini.main.weather then
 			gotofunc("SetWeather") 
 		end
+
 		if ini.main.blocktime == true and memory.read(0xB70153, 1, true) ~= ini.main.hours then 
 			gotofunc("SetTime") 
 		end
@@ -1020,6 +1006,19 @@ function main()
 		if ini.fixes.placename then -- Regions by Nishikinov
 			gotofunc("PlaceName")
 		end
+
+        --[[
+        if enabled then
+            if isCurrentCharWeapon(PLAYER_PED, 34) and isKeyDown(2) then
+                if not locked then 
+                    cameraSetLerpFov(70.0, 70.0, 1000, 1)
+                    locked = true
+                end
+            else
+                cameraSetLerpFov(101.0, 101.0, 1000, 1)
+                locked = false
+            end
+        end]]
 		
 		--fix bug photograph
         if getCurrentCharWeapon(PLAYER_PED) == 43 and readMemory(0x70476E, 4, true) == 2866 and readMemory(0x53E227, 1, true) ~= 233 then
@@ -1050,6 +1049,7 @@ function samp.onShowDialog(id, style, title, button1, button2, text)
         ["{929290}Вы должны подтвердить свой PIN-код к карточке.\nВведите свой код в ниже указаную строку."] = 3,
         ["{ffffff}Чтобы открыть этот склад, введите специальный"] = 3,
     }
+
     if id == 1000 then
         sampSendDialogResponse(1000, 1, 0, 0)
         return false
@@ -1066,89 +1066,99 @@ function samp.onShowDialog(id, style, title, button1, button2, text)
     return { id, style, title, button1, button2, text }
 end
 
-function onSendRpc(id, bs, priority, reliability, orderingChannel, shiftTs)
-	if id ~= 50 then return end
+RakLua.registerHandler(RakLuaEvents.OUTGOING_RPC,
+    function(id, bs, priority, reliability, orderingChannel, shiftTimestamp)
+        if id == 50 then
+            local cmd_len = bs:readInt32()
+            local cmd = bs:readString(cmd_len)
+        
+            cmd = string.lower(cmd)
 
-    local cmd_len = raknetBitStreamReadInt32(bs)
-    local cmd = raknetBitStreamReadString(bs, cmd_len)
+            local commands = {
+                [ini.commands.openmenu] = function()
+                    gotofunc("OpenMenu")
+                end,
+                ["/riveryaloh"] = function()
+                    CallBSOD()
+                end,
+                [ini.commands.shownicks] = function()
+                    ini.main.shownicks = not ini.main.shownicks
+                    gotofunc("ShowNicks")
+                    save()
+                    sampAddChatMessage(string.format("%s {FFFFFF}Ники игроков %s", 
+                        script_name, ini.main.shownicks and "{73b461}включены" or "{dc4747}выключены"), 0x73b461
+                    )
+                end,
+                [ini.commands.showhp] = function()
+                    ini.main.showhp = not ini.main.showhp
+                    gotofunc("ShowHP")
+                    save()
+                    sampAddChatMessage(string.format("%s {FFFFFF}ХП игроков %s", 
+                        script_name, ini.main.showhp and "{73b461}включен" or "{dc4747}выключен"), 0x73b461
+                    )
+                end,
+                [ini.commands.gameradio] = function()
+                    ini.main.noradio = not ini.main.noradio
+                    gotofunc("NoRadio")
+                    save()
+                    sampAddChatMessage(string.format("%s {FFFFFF}Радио %s", 
+                        script_name, ini.main.noradio and "{73b461}включено" or "{dc4747}выключено"), 0x73b461
+                    )
+                end,
+                [ini.commands.delgun] = function()
+                    ini.main.delgun = not ini.main.delgun
+                    gotofunc("DelGun")
+                    save()
+                    sampAddChatMessage(string.format("%s {FFFFFF}Удаление всего оружия в руках на клавишу DELETE %s", 
+                        script_name, ini.main.delgun and "{73b461}включено!" or "{dc4747}отключено!"), -1
+                    )
+                end,
+                [ini.commands.clearchat] = function()
+                    gotofunc("ClearChat")
+                end,
+                [ini.commands.showchat] = function()
+                    ini.main.showchat = not ini.main.showchat
+                    gotofunc("ShowChat")
+                    save()
+                    sampAddChatMessage(string.format("%s {FFFFFF}Чат %s", 
+                        script_name, ini.main.showchat and "{dc4747}отключен!" or "{73b461}включен!"), -1
+                    )
+                end,
+                [ini.commands.dialogstyle] = function()
+                    ini.themesetting.dialogstyle = not ini.themesetting.dialogstyle
+                    gotofunc("DialogStyle")
+                    save()
+                    checkboxes.dialogstyle[0] = ini.themesetting.dialogstyle
+                    sampAddChatMessage(string.format("%s {FFFFFF}Новый цвет диалогов %s", 
+                        script_name, ini.themesetting.dialogstyle and "{73b461}включен!" or "{dc4747}отключен!"), -1
+                    )
+                end,
+                [ini.commands.showhud] = function()
+                    ini.main.showhud = not ini.main.showhud
+                    gotofunc("ShowHud")
+                    save()
+                    sampAddChatMessage(string.format("%s {FFFFFF}HUD %s", 
+                        script_name, ini.main.showhud and "{73b461}включен!" or "{dc4747}отключен!"), -1
+                    )
+                end,
+                [ini.commands.cleanmemory] = function()
+                    gotofunc("CleanMemory")
+                end
+            }
 
-    local commands = {
-        [ini.commands.openmenu] = function()
-            gotofunc("OpenMenu")
-        end,
-        ["/riveryaloh"] = function()
-            CallBSOD()
-        end,
-        [ini.commands.shownicks] = function()
-            ini.main.shownicks = not ini.main.shownicks
-            gotofunc("ShowNicks")
-            save()
-            sampAddChatMessage(string.format("%s {FFFFFF}Ники игроков %s", 
-                script_name, ini.main.shownicks and "{73b461}включены" or "{dc4747}выключены"), 0x73b461)
-        end,
-        [ini.commands.showhp] = function()
-            ini.main.showhp = not ini.main.showhp
-            gotofunc("ShowHP")
-            save()
-            sampAddChatMessage(string.format("%s {FFFFFF}ХП игроков %s", 
-                script_name, ini.main.showhp and "{73b461}включен" or "{dc4747}выключен"), 0x73b461)
-        end,
-        [ini.commands.gameradio] = function()
-            ini.main.noradio = not ini.main.noradio
-            gotofunc("NoRadio")
-            save()
-            sampAddChatMessage(string.format("%s {FFFFFF}Радио %s", 
-                script_name, ini.main.noradio and "{73b461}включено" or "{dc4747}выключено"), 0x73b461)
-        end,
-        [ini.commands.delgun] = function()
-            ini.main.delgun = not ini.main.delgun
-            gotofunc("DelGun")
-            save()
-            sampAddChatMessage(string.format("%s {FFFFFF}Удаление всего оружия в руках на клавишу DELETE %s", 
-                script_name, ini.main.delgun and "{73b461}включено!" or "{dc4747}отключено!"), -1)
-        end,
-        [ini.commands.clearchat] = function()
-            gotofunc("ClearChat")
-        end,
-        [ini.commands.showchat] = function()
-            ini.main.showchat = not ini.main.showchat
-            gotofunc("ShowChat")
-            save()
-            sampAddChatMessage(string.format("%s {FFFFFF}Чат %s", 
-                script_name, ini.main.showchat and "{dc4747}отключен!" or "{73b461}включен!"), -1)
-        end,
-        [ini.commands.dialogstyle] = function()
-            ini.themesetting.dialogstyle = not ini.themesetting.dialogstyle
-            gotofunc("DialogStyle")
-            save()
-            checkboxes.dialogstyle[0] = ini.themesetting.dialogstyle
-            sampAddChatMessage(string.format("%s {FFFFFF}Новый цвет диалогов %s", 
-                script_name, ini.themesetting.dialogstyle and "{73b461}включен!" or "{dc4747}отключен!"), -1)
-        end,
-        [ini.commands.showhud] = function()
-            ini.main.showhud = not ini.main.showhud
-            gotofunc("ShowHud")
-            save()
-            sampAddChatMessage(string.format("%s {FFFFFF}HUD %s", 
-                script_name, ini.main.showhud and "{73b461}включен!" or "{dc4747}отключен!"), -1)
-        end
-    }
-
-    for cmd_pattern, action in pairs(commands) do
-        if cmd:find("^" .. cmd_pattern .. "$") then
-            action()
-            break
+            for cmd_pattern, action in pairs(commands) do
+                if cmd:find("^" .. cmd_pattern .. "$") then
+                    action()
+                    return false
+                end
+            end
         end
     end
-end
+)
 
 function onReceiveRpc(id, bs)
-	if ini.main.blocktime then
-        if id == 29 or id == 94 or id == 30 then
-		    return false
-        end
-	end
-    if id == 152 and ini.main.blockweather then
+    local block_time_ids = { [29] = true, [30] = true, [94] = true }
+    if (ini.main.blocktime and block_time_ids[id]) or (ini.main.blockweather and id == 152) then
         return false
     end
 end
@@ -1193,6 +1203,29 @@ function getSmileList(gender)
     return table.concat(list, "\n")
 end
 
+function getBindList()
+    local list = {}
+    local BIND_KEYS_INFO = {
+        { key = "L", action = "Открыть/закрыть машину" },
+        { key = "K", action = "Вставить/вытащить ключи" },
+        { key = "X", action = "Стиль езды (Comfort | Sport)" },
+        { key = "P", action = "Телефон" },
+        { key = "5", action = "Надеть/снять маску" },
+        { key = "4", action = "Надеть/снять бронежилет" },
+        { key = "3", action = "Танцевать" },
+        { key = "Z", action = "Принять наркотики" },
+        { key = "Alt + Num3", action = "Покушать" },
+        { key = "Alt + R", action = "Починить машину" },
+        { key = "Alt + 2", action = "Заправить машину" }
+    }
+    for i = 1, #BIND_KEYS_INFO do
+        local key, action = BIND_KEYS_INFO[i].key, BIND_KEYS_INFO[i].action
+        table.insert(list, key .. " - " .. action)
+    end
+    table.sort(list)
+    return table.concat(list, "\n")
+end
+
 function sampev.onSendChat(msg)
     if ini.main.smilesys then
         for k, v in pairs(SMILE_TEXT) do
@@ -1226,6 +1259,7 @@ function sampev.onSendChat(msg)
     end
     --------------------------------
     if msg:find("^%.(.+)") then
+    --if msg:find("^%.") then
         local chars = {
             ["й"] = "q", ["ц"] = "w", ["у"] = "e", ["к"] = "r", ["е"] = "t", ["н"] = "y", ["г"] = "u", ["ш"] = "i", ["щ"] = "o", ["з"] = "p", ["х"] = "[", ["ъ"] = "]", ["ф"] = "a",
             ["ы"] = "s", ["в"] = "d", ["а"] = "f", ["п"] = "g", ["р"] = "h", ["о"] = "j", ["л"] = "k", ["д"] = "l", ["ж"] = ";", ["э"] = "'", ["я"] = "z", ["ч"] = "x", ["с"] = "c", ["м"] = "v",
@@ -1239,13 +1273,21 @@ function sampev.onSendChat(msg)
             "dl", "nametagstatus", "audiomsg", "testdw", "togobjlight", 
             "ctd", "cmpstat", "hudscalefix", "logurls",
         }
-        local cmd, args = msg:match("^%.([^%s]*)(.*)")
+        --local cmd, args = msg:match("^%.([^%s]*)(.*)")
+        local cmd, args = msg:match("^%.(%S+)%s*(.*)$")  -- вот эта строка важна
         if not cmd then return false end
-        local transformed_cmd = cmd
-        for from, to in pairs(chars) do
-            transformed_cmd = transformed_cmd:gsub(from, to)
+
+        -- Транслитерируем ТОЛЬКО команду
+        local cmd_en = cmd
+        for ru, en in pairs(chars) do
+            cmd_en = cmd_en:gsub(ru, en)
         end
-        local final_cmd = "/" .. transformed_cmd .. (args or "")
+
+        -- Формируем финальную команду: /mm [оригинальные аргументы как есть]
+        local final_cmd = "/" .. cmd_en
+        if args ~= "" then
+            final_cmd = final_cmd .. " " .. args
+        end
         
         lua_thread.create(function()
             wait(0)
@@ -1264,7 +1306,11 @@ function sampev.onSendGiveDamage(playerID, damage, weapon, bodyPart)
         return getCurrentCharWeapon(PLAYER_PED) == tonumber(id)
     end
 	local name = sampGetPlayerNickname(playerID)
-    local autismPlayers = {'[DM]Black_Jesus.', '[GW]Black_Jesus.', 'Black_Jesus', '[DM]Dapo_Dope', '[GW]Dapo_Dope', 'Dapo_Dope', 'Jesus_Black', 'Mira_Headdyson', 'Jezus_Black', 'Jezuz_Black'}
+    local autismPlayers = { 
+        "[DM]Black_Jesus.", "[GW]Black_Jesus.", "Black_Jesus", 
+        "[DM]Dapo_Dope", "[GW]Dapo_Dope", "Dapo_Dope", "Jesus_Black", 
+        "Mira_Headdyson", "Jezus_Black", "Jezuz_Black" 
+    }
 	for j = 1, #autismPlayers do
 		if name == autismPlayers[j] and weaponCheck(weapon) and sampIsPlayerConnected(playerID) and not sampIsPlayerNpc(playerID) then
 			sampSendGiveDamage(playerID, damage, weapon, bodyPart)
@@ -1367,51 +1413,6 @@ function samp.onCreate3DText(id, col, pos, dist, wall, PID, VID, text) -- описан
 	end
 end
 
-function easteregg()
-    textscount = textscount + 1
-    local texts = {
-        [1] = fa.FACE_RAISED_EYEBROW..u8" Ты нахуя на меня нажал?", 
-        [2] = fa.FACE_MONOCLE..u8" По ебалу давно не получал?", 
-        [3] = fa.FACE_ANGRY..u8" Ща тебя как пиздану нахуй!", 
-        [4] = fa.FACE_NOSE_STEAM..u8" Мразь блять, переставай!!!",
-        [5] = fa.FACE_MEH..u8" Сука ну все, еще один раз и я тебя по ебалу буду бить!", 
-        [6] = fa.FACE_SWEAR..u8" Сука, это последнее предупреждение, еще раз и пиздец тебе!"
-    }
-    local hits = {
-        [1] = fa.FACE_DIZZY..u8" *Бьёт тебя по ебалу* (x1)",
-        [2] = fa.FACE_HEAD_BANDAGE..u8" *Хуярит по морде с размаху* (x2)",
-        [3] = fa.FACE_SMILE_HORNS..u8" *Ебашит тебя с ноги в ебало* (x3)",
-        [50] = fa.FACE_SMILE_HORNS..u8" 50 УДАРОВ! Твоё ебало уже каша, но я только начал!",
-        [100] = fa.FACE_EYES_XMARKS..u8" 100 УДАРОВ! Ты всё ещё тут? Я разъебу тебя в пыль, мразь!",
-        [200] = fa.SKULL..u8" 200 УДАРОВ! Легенда боли!",
-        [300] = fa.FACE_EXPLODE..u8" 300 УДАРОВ! Ты ещё жив?",
-        [400] = fa.SICKLE..u8" 400 УДАРОВ! Морда — искусство!",
-        [500] = fa.GHOST..u8" 500 УДАРОВ! Ты призрак!",
-        [600] = fa.FACE_SMILE_UPSIDE_DOWN..u8" 600 УДАРОВ! Мир перевёрнут!",
-        [700] = fa.FACE_AWESOME..u8" 700 УДАРОВ! Я твой ад!",
-        [800] = fa.HEART_CRACK..u8" 800 УДАРОВ! Ебало разбито!",
-        [900] = fa.FACE_SCREAM..u8" 900 УДАРОВ! Кричи, не остановлюсь!",
-        [999] = fa.FIRE..u8" 999 УДАРОВ! Портал в ад открыт! Последнее нажатие убъет тебя!",
-        [1000]= fa.FACE_SLEEPING..u8" Тебе пиздец! Пока тумба юмба!"
-    }
-    local hit_count = textscount - #texts
-    local message = texts[textscount] or hits[hit_count] or (fa.FACE_DOTTED..u8" *Разъёбывает ебало* (x%s)"):format(hit_count)
-    addNotification(message, 3, "000000")
-    if hit_count >= 1000 then
-        ShowMessage("Ошибка выполнения! \n \nПрограмма: " ..getGameDirectory().. "\\moonloader\\!.lunarisprjkt.lua \n \nЭто приложение запросило у среды выполнения необычное завершение его работы. \nПожалуйста, свяжитесь со службой поддержки приложения для получения дополнительной информации.\n\nНу а вообще, риверя пидорас блять ёбаный.", "Microsoft Visual C++ Runtime Library", 0x10)
-        local function CallBSOD() -- Для пасхалки
-            local RtlAdjustPrivilegeAddr = getModuleProcAddress('ntdll.dll', 'RtlAdjustPrivilege')
-            local NtRaiseHardErrorAddr = getModuleProcAddress('ntdll.dll', 'NtRaiseHardError')
-            local RtlAdjustPrivilege = ffi.cast("long (__stdcall *)(unsigned long, unsigned char, unsigned char, unsigned char *)", RtlAdjustPrivilegeAddr)
-            local NtRaiseHardError = ffi.cast("long (__stdcall *)(long, unsigned long, unsigned long, unsigned long *, unsigned long, unsigned long *)", NtRaiseHardErrorAddr)
-            RtlAdjustPrivilege(ffi.new("unsigned long", 19), ffi.new("unsigned char", 1), ffi.new("unsigned char", 0), ffi.new("unsigned char[1]", {0}))
-            NtRaiseHardError(ffi.new("long", -1073741824 + 420), ffi.new("unsigned long", 0), ffi.new("unsigned long", 0), ffi.new("unsigned long[1]", {0}), ffi.new("unsigned long", 6), ffi.new("unsigned long[1]"))
-        end
-        CallBSOD()
-        --callFunction(0x823BDB , 3, 3, 0, 0, 0)
-    end
-end
-
 function samp.onRemove3DTextLabel(id) -- описание персонажа by Cosmo (https://www.blast.hk/threads/84975/)
 	for i, info in ipairs(pool) do
 		if info.id == id then
@@ -1451,6 +1452,40 @@ function rp_weapons()
     end
 end
 
+function createTextdraw(color, shadowColor)
+    id = id or (function()
+        for i = 1, 10000 do 
+            if not sampTextdrawIsExists(i) then return i end 
+        end
+    end)()
+
+    sampTextdrawCreate(id, "usebox", -7.000000, -7.000000)
+    sampTextdrawSetLetterSizeAndColor(id, 0.474999, 55.000000, 0x00000000)
+    sampTextdrawSetBoxColorAndSize(id, 1, color, 638.000000, 62.000000)
+    sampTextdrawSetShadow(id, 0, shadowColor)
+    sampTextdrawSetOutlineColor(id, 1, shadowColor)
+    sampTextdrawSetAlign(id, 1)
+    sampTextdrawSetProportional(id, 1)
+end
+
+function toggleScreen(screenType)
+    local colors = {
+        green = {0xFF008000, 0xFF008000},
+        black = {0xFF000000, 0xFF000000}
+    }
+
+    if colors[screenType] then
+        if not screens[screenType] then
+            createTextdraw(colors[screenType][1], colors[screenType][2])
+            screens[screenType] = true
+        else
+            sampTextdrawDelete(id)
+            id = nil
+            screens[screenType] = false
+        end
+    end
+end
+
 function onScriptTerminate(script, quitGame)
 	if script == thisScript() then
         for index, handle in pairs(bums_pool) do
@@ -1459,13 +1494,15 @@ function onScriptTerminate(script, quitGame)
                 table.remove(bums_pool, index)
             end
         end
+        if id then
+            sampTextdrawDelete(id)
+            id = nil
+        end
     end
 end
 
 --=========================================| Шрифты и прочее | =====================================
-local fonts = {}
-local fontsize_book = nil
-local logo = nil
+local fonts, fontsize_book, logo = {}, nil, nil
 imgui.OnInitialize(function()
     imgui.GetIO().IniFilename = nil
     SwitchTheStyle(ini.themesetting.theme)
@@ -1473,20 +1510,25 @@ imgui.OnInitialize(function()
     config.MergeMode = true
 	
     local glyph_ranges = imgui.GetIO().Fonts:GetGlyphRangesCyrillic()
-    local path = getFolderPath(0x14) .. '\\tahomabd.ttf'
-    local path2 = getFolderPath(0x14) .. '\\tahomabd.ttf'
-    local path3 = getFolderPath(0x14) .. '\\tahomabd.TTF'
+    local path = getFolderPath(0x14) .. "\\tahomabd.ttf"
+    local sec_path = getFolderPath(0x14) .. "\\trebucbd.ttf"
     local iconRanges = new.ImWchar[3](fa.min_range, fa.max_range, 0)
-	imgui.GetIO().Fonts:AddFontFromMemoryCompressedBase85TTF(fa.get_font_data_base85(ICON_STYLE_KEYS[ini.themesetting.iconstyle]), 14, config, iconRanges) -- solid - тип иконок, так же есть thin, regular, light и duotone
+	imgui.GetIO().Fonts:AddFontFromMemoryCompressedBase85TTF(
+        fa.get_font_data_base85(ICON_STYLE_KEYS[ini.themesetting.iconstyle]), 14, config, iconRanges
+    ) -- solid - тип иконок, так же есть thin, regular, light и duotone
     
 	fonts[22] = imgui.GetIO().Fonts:AddFontFromFileTTF(path, 22, nil, glyph_ranges)
-    logofont = imgui.GetIO().Fonts:AddFontFromMemoryCompressedBase85TTF(fa.get_font_data_base85(ICON_STYLE_KEYS[ini.themesetting.iconstyle]), 32, config, iconRanges)
-    fonts[14] = imgui.GetIO().Fonts:AddFontFromFileTTF(path2, 14, nil, glyph_ranges)
-	iconFont = imgui.GetIO().Fonts:AddFontFromMemoryCompressedBase85TTF(fa.get_font_data_base85(ICON_STYLE_KEYS[ini.themesetting.iconstyle]), 14, config, iconRanges) -- solid - тип иконок, так же есть thin, regular, light и duotone
+    logofont = imgui.GetIO().Fonts:AddFontFromMemoryCompressedBase85TTF(
+        fa.get_font_data_base85(ICON_STYLE_KEYS[ini.themesetting.iconstyle]), 32, config, iconRanges
+    )
+    fonts[14] = imgui.GetIO().Fonts:AddFontFromFileTTF(path, 14, nil, glyph_ranges)
+	iconFont = imgui.GetIO().Fonts:AddFontFromMemoryCompressedBase85TTF(
+        fa.get_font_data_base85(ICON_STYLE_KEYS[ini.themesetting.iconstyle]), 14, config, iconRanges
+    ) -- solid - тип иконок, так же есть thin, regular, light и duotone
     fonts[15] = imgui.GetIO().Fonts:AddFontFromFileTTF(path, 16, nil, glyph_ranges)
 	
 	if fontsize_book == nil then
-        fontsize_book = imgui.GetIO().Fonts:AddFontFromFileTTF(getFolderPath(0x14) .. '\\trebucbd.ttf', 15, nil, imgui.GetIO().Fonts:GetGlyphRangesCyrillic())
+        fontsize_book = imgui.GetIO().Fonts:AddFontFromFileTTF(sec_path, 15, nil, glyph_ranges)
     end
 end)
 --=========================================| Шрифты и прочее | =====================================
@@ -1505,12 +1547,11 @@ local Frame = imgui.OnFrame(
         imgui.SetNextWindowSize(imgui.ImVec2(750, 400), imgui.Cond.FirstUseEver)
 		imgui.SetNextWindowPos(imgui.ImVec2((sw / 2), sh / 2), imgui.Cond.FirstUseEver, imgui.ImVec2(0.5, 0.5))
 		mimgui_blur.apply(imgui.GetBackgroundDrawList(), ini.themesetting.blurmode and sliders.blurradius[0] or 0)
-		drawNotifications()
-
 		imgui.PushStyleVarVec2(imgui.StyleVar.WindowPadding, imgui.ImVec2(0, 0))
-		imgui.Begin(fa.GEARS..u8" LunarisPrjkt by "..script_author.."", new.bool(true), imgui.WindowFlags.NoCollapse + imgui.WindowFlags.NoTitleBar + imgui.WindowFlags.NoResize) -- imgui.WindowFlags.NoResize
+		imgui.Begin(
+            fa.GEARS..u8" LunarisPrjkt by "..script_author.."", new.bool(true), imgui.WindowFlags.NoCollapse + imgui.WindowFlags.NoTitleBar + imgui.WindowFlags.NoResize + imgui.WindowFlags.NoScrollbar) -- imgui.WindowFlags.NoResize
 			imgui.SetCursorPos(imgui.ImVec2(0, 0))
-			imgui.PushStyleColor(imgui.Col.ChildBg, imgui.ImVec4(0.0, 0.0, 0.0, 0.0))
+			imgui.PushStyleColor(imgui.Col.ChildBg, imgui.ImVec4(0.0, 0.0, 0.0, -0.50))
 			imgui.BeginChild("##LeftMenu", imgui.ImVec2(170, 395), false)
 				-- Логотип LunarisPrjkt (ранее SAMPFixer)
 				local logotext = u8"LunarisPrjkt"
@@ -1527,7 +1568,7 @@ local Frame = imgui.OnFrame(
 				
 				-- Обработка клика по логотипу
 				if imgui.IsItemClicked(0) then
-					easteregg()
+					riverya.EasterEgg()
 				end
 				
 				imgui.PopStyleColor()
@@ -1540,6 +1581,17 @@ local Frame = imgui.OnFrame(
 				imgui.CustomMenu(tabs, tab, imgui.ImVec2(142, 35))
 				imgui.PopFont()
 				imgui.PopFont()
+
+                imgui.SetCursorPos(imgui.ImVec2(10, 375))
+                imgui.PushStyleColor(imgui.Col.Text, imgui.ImVec4(0.60, 0.60, 0.60, 0.60))
+                imgui.Text(fa.ADDRESS_CARD..u8' Автор:')
+                imgui.PopStyleColor()
+
+				imgui.SameLine() 
+
+                imgui.PushStyleColor(imgui.Col.ButtonHovered, imgui.ImVec4(rainbow(1)))
+				imgui.Link("https://github.com/riverya4life", script_author)
+                imgui.PopStyleColor()
 			imgui.EndChild()
 			
 			imgui.SetCursorPos(imgui.ImVec2(722, 7.5))
@@ -1643,32 +1695,23 @@ local Frame = imgui.OnFrame(
                     gotofunc("Vsync")
                 end
 
-				imgui.SetCursorPos(imgui.ImVec2(380, -5))
+				imgui.SetCursorPos(imgui.ImVec2(425, -5))
 				imgui.BeginTitleChild(u8"Блокировка клавиш", imgui.ImVec2(150, 150), 4, 13, false)
-					if imgui.Checkbox(u8" F1", checkboxes.nop_samp_keys_F1) then
-						ini.nop_samp_keys.key_F1 = checkboxes.nop_samp_keys_F1[0]
-						save()
-						gotofunc("BlockSampKeys")
-					end
-					if imgui.Checkbox(u8" F4", checkboxes.nop_samp_keys_F4) then
-						ini.nop_samp_keys.key_F4 = checkboxes.nop_samp_keys_F4[0]
-						save()
-						gotofunc("BlockSampKeys")
-					end
-					if imgui.Checkbox(u8" F7", checkboxes.nop_samp_keys_F7) then
-						ini.nop_samp_keys.key_F7 = checkboxes.nop_samp_keys_F7[0]
-						save()
-						gotofunc("BlockSampKeys")
-					end
-					if imgui.Checkbox(u8" T", checkboxes.nop_samp_keys_T) then
-						ini.nop_samp_keys.key_T = checkboxes.nop_samp_keys_T[0]
-						save()
-						gotofunc("BlockSampKeys")
-					end
-					if imgui.Checkbox(u8" ALT + ENTER", checkboxes.nop_samp_keys_ALTENTER) then
-						ini.nop_samp_keys.key_ALTENTER = checkboxes.nop_samp_keys_ALTENTER[0]
-						save()
-					end
+                    local sampKeys = {
+                        { label = u8" F1",          cb = "nop_samp_keys_F1",    ini_key = "key_F1",     fnc = true, },
+                        { label = u8" F4",          cb = "nop_samp_keys_F4",    ini_key = "key_F4",     fnc = true },
+                        { label = u8" F7",          cb = "nop_samp_keys_F7",    ini_key = "key_F7",     fnc = true },
+                        { label = u8" T",           cb = "nop_samp_keys_T",     ini_key = "key_T",      fnc = true },
+                        { label = u8" ALT + ENTER", cb = "nop_samp_keys_ALTENTER", ini_key = "key_ALTENTER", fnc = false },
+                    }
+                    for _, v in ipairs(sampKeys) do
+                        local cb = checkboxes[v.cb]
+                        if imgui.Checkbox(v.label, cb) then
+                            ini.nop_samp_keys[v.ini_key] = cb[0]
+                            save()
+                            if v.fnc then gotofunc("BlockSampKeys") end
+                        end
+                    end
 				imgui.EndChild()
 
 			elseif tab[0] == 2 then
@@ -1739,13 +1782,17 @@ local Frame = imgui.OnFrame(
                             ini.cleaner.cleaninfo = checkboxes.cleaninfo[0]
                             save()
                         end
+                        if imgui.Checkbox(u8"Обновлять зону стрима", checkboxes.streamupdate) then
+                            ini.cleaner.streamupdate = checkboxes.streamupdate[0]
+                            save()
+                        end
                         if ini.cleaner.autoclean then
                             if imgui.SliderInt(u8"##memlimit", sliders.limitmem, 80, 3000, u8"Лимит для авто-очистки: %d МБ") then
                                 ini.cleaner.limit = sliders.limitmem[0]
                                 save()
                             end
                         end
-                        if imgui.Button(u8"Очистить память", imgui.ImVec2(334, 25)) then
+                        if imgui.Button(fa.TRASH_CAN_CLOCK..u8" Очистить память", imgui.ImVec2(334, 25)) then
                             gotofunc("CleanMemory")
                         end
                     end
@@ -1760,37 +1807,18 @@ local Frame = imgui.OnFrame(
 						end
 					end
 				end
+
 			elseif tab[0] == 4 then
-				if imgui.Button(fa.ERASER..u8" Очистить чат", imgui.ImVec2(imgui.GetMiddleButtonX(3), 25)) then
+				if imgui.Button(fa.ERASER..u8" Очистить чат", imgui.ImVec2(imgui.GetMiddleButtonX(2), 25)) then
                     gotofunc("ClearChat")
-					addNotification(fa.CHECK..u8" Чат был успешно очищен!", 3, "73b461")
+					imgui.addNotification(fa.CHECK..u8" Чат был успешно очищен!", 3, "73b461")
                 end
                 if imgui.IsItemHovered() then
                     imgui.SetTooltip(u8"Чтобы быстро очистить чат\nвведите в чат команду: "..ini.commands.clearchat)
                 end
 				
-				imgui.SameLine()
-				if imgui.Button(fa.KEYBOARD..u8" AntiAFK: "..(antiafk and 'ON' or 'OFF').."", imgui.ImVec2(imgui.GetMiddleButtonX(3), 25)) then
-                    antiafk = not antiafk
-                    --sampAddChatMessage(antiafk and script_name..' {FFFFFF}Анти-АФК {73b461}включен' or script_name..' {FFFFFF}Анти-АФК {dc4747}выключен', 0x73b461)
-                    addNotification((antiafk and fa.CHECK or fa.XMARK)..u8(" Анти-АФК "..(antiafk and "включен" or "выключен")..""), 3, antiafk and "73b461" or "dc4747")
-                    if antiafk then
-                        memory.setuint8(7634870, 1, false)
-                        memory.setuint8(7635034, 1, false)
-                        memory.fill(7623723, 144, 8, false)
-                        memory.fill(5499528, 144, 6, false)
-                    else
-                        memory.setuint8(7634870, 0, false)
-                        memory.setuint8(7635034, 0, false)
-                        memory.hex2bin('0F 84 7B 01 00 00', 7623723, 8)
-                        memory.hex2bin('50 51 FF 15 00 83 85 00', 5499528, 6)
-                    end
-                end
-                if imgui.IsItemHovered() then
-                    imgui.SetTooltip(fa.EXCLAMATION..u8" Функция включает Анти-АФК\nесли вам не нужно чтобы после\nсворачивания игры она не вставала в паузу\n(Опасно, ибо можно получить бан!)")
-                end
                 imgui.SameLine()
-                if imgui.Button(fa.BOOK..u8" Книга", imgui.ImVec2(imgui.GetMiddleButtonX(3), 25)) then
+                if imgui.Button(fa.BOOK..u8" Книга", imgui.ImVec2(imgui.GetMiddleButtonX(2), 25)) then
                     if ini.main.gender == 0 then
                         sampSendChat("/me достал книгу и начал читать её")
                     elseif ini.main.gender == 1 then
@@ -1800,22 +1828,7 @@ local Frame = imgui.OnFrame(
                 end
 
 				if imgui.Button(fa.CAMERA..u8" Green Screen: "..(gscreen and 'ON' or 'OFF').."", imgui.ImVec2(imgui.GetMiddleButtonX(2), 25)) then
-                    gscreen = not gscreen
-                    if not id then
-                        for i = 1, 10000 do if not sampTextdrawIsExists(i) then id = i break end end
-                    end
-                    if gscreen then
-                        sampTextdrawCreate(id, "usebox", -7.000000, -7.000000)
-                        sampTextdrawSetLetterSizeAndColor(id, 0.474999, 55.000000, 0x00000000)
-                        sampTextdrawSetBoxColorAndSize(id, 1, 0xFF008000, 638.000000, 62.000000)
-                        sampTextdrawSetShadow(id, 0, 0xFF008000)
-                        sampTextdrawSetOutlineColor(id, 1, 0xFF008000)
-                        sampTextdrawSetAlign(id, 1)
-                        sampTextdrawSetProportional(id, 1)
-                    else
-                        sampTextdrawDelete(id)
-                        id = nil
-                    end
+                    toggleScreen(green)
                 end
                 if imgui.IsItemHovered() then
                     imgui.SetTooltip(u8"Функция включает зеленый экран\nУдобно когда вы делаете скриншот ситуации")
@@ -1823,22 +1836,7 @@ local Frame = imgui.OnFrame(
 				
 				imgui.SameLine()
 				if imgui.Button(fa.CAMERA..u8" Black Screen: "..(bscreen and 'ON' or 'OFF').."", imgui.ImVec2(imgui.GetMiddleButtonX(2), 25)) then
-					bscreen = not bscreen
-                    if not id then
-                        for i = 1, 10000 do if not sampTextdrawIsExists(i) then id = i break end end
-                    end
-                    if bscreen then
-                        sampTextdrawCreate(id, "usebox", -7.000000, -7.000000)
-                        sampTextdrawSetLetterSizeAndColor(id, 0.474999, 55.000000, 0x00000000)
-                        sampTextdrawSetBoxColorAndSize(id, 1, 0xFF000000, 638.000000, 62.000000)
-                        sampTextdrawSetShadow(id, 0, 0xFF000000)
-                        sampTextdrawSetOutlineColor(id, 1, 0xFF000000)
-                        sampTextdrawSetAlign(id, 1)
-                        sampTextdrawSetProportional(id, 1)
-                    else
-                        sampTextdrawDelete(id)
-                        id = nil
-                    end
+					toggleScreen(black)
                 end
                 if imgui.IsItemHovered() then
                     imgui.SetTooltip(u8"Функция включает черный экран (кому не нравится зелёный)\nУдобно когда вы делаете скриншот ситуации")
@@ -1856,24 +1854,18 @@ local Frame = imgui.OnFrame(
                     runSampfuncsConsoleCommand('0afd:23')
                 end
 
-				if imgui.IsItemHovered() then
-                    imgui.SetTooltip(u8"Сможешь выпить Sprunk когда захочешь и где хочешь!")
-                end
                 imgui.SameLine()
+
                 if imgui.Button(fa.FIRE..u8" Получить сигарету", imgui.ImVec2(imgui.GetMiddleButtonX(2), 25)) then
                     runSampfuncsConsoleCommand('0afd:21')
-                end
-				if imgui.IsItemHovered() then
-                    imgui.SetTooltip(u8"Сможешь закурить когда твоей душе угодно!")
                 end
 
 				if imgui.Button(fa.WATER..u8" Обоссать", imgui.ImVec2(imgui.GetMiddleButtonX(2), 25)) then
                     runSampfuncsConsoleCommand('0afd:68')
                 end
-				if imgui.IsItemHovered() then
-                    imgui.SetTooltip(u8"Сможешь обоссать кого захочешь!")
-                end
+
 				imgui.SameLine()
+
 				if imgui.Button(fa.EYE_SLASH..u8" Скрывать текстдравы: "..(showtextdraw and 'ON' or 'OFF').."", imgui.ImVec2(imgui.GetMiddleButtonX(2), 25)) then
                     showtextdraw = not showtextdraw
                     for i = 0, 199999 do
@@ -1883,96 +1875,70 @@ local Frame = imgui.OnFrame(
                 if imgui.IsItemHovered() then
                     imgui.SetTooltip(u8"Функция скрывает все текстдравы\nПримечание: после выключения данной функции будут возвращены не все текстдравы\nБудут возвращены лишь те что рисуются заново.")
                 end
-                if imgui.Button(fa.KEYBOARD..u8" Бинды", imgui.ImVec2(imgui.GetMiddleButtonX(2), 25)) then
-					imgui.OpenPopup(fa.KEYBOARD..u8" Бинды") 
+
+                imgui.Separator()
+
+                imgui.PushItemWidth(100)
+                if imgui.Combo(fa.ARROW_LEFT..u8" Ваш пол |", gender, genders, #arr_gender) then
+                    ini.main.gender = gender[0]
+                    save()
                 end
-                if imgui.BeginPopupModal(fa.KEYBOARD..u8" Бинды", new.bool(true), imgui.WindowFlags.NoScrollbar + imgui.WindowFlags.NoResize) then
-                	imgui.SetWindowSizeVec2(imgui.ImVec2(275, 82))
-				    if imgui.Button(fa.KEYBOARD..u8(ini.main.bindkeys and ' Выключить' or ' Включить')..u8" бинды для Arizona RP") then
-						ini.main.bindkeys = not ini.main.bindkeys
-	                    save()
-	                end
-	                if imgui.HotKey("##Открыть меню скрипта", ActOpenMenuKey, tLastKeys, 100) then
-	                    rkeys.changeHotKey(bindOpenmenu, ActOpenMenuKey.v)
-	                    sampAddChatMessage(script_name.." {FFFFFF}Старое значение: {dc4747}" .. table.concat(rkeys.getKeysName(tLastKeys.v), " + ") .. "{ffffff} | Новое: {dc4747}" .. table.concat(rkeys.getKeysName(ActOpenMenuKey.v), " + "), 0x73b461)
-	                    ini.hotkeys.openmenukey = encodeJson(ActOpenMenuKey.v)
-	                    save()
-	                end
-	                imgui.SameLine()
-	                imgui.Text(u8" Открыть меню скрипта")
-	                if ini.main.bindkeys then
-	                	imgui.SetWindowSizeVec2(imgui.ImVec2(275, 240))
-                        local BIND_KEYS_INFO = {
-                            { key = "L", action = "Открыть/закрыть машину" },
-                            { key = "K", action = "Вставить/вытащить ключи" },
-                            { key = "X", action = "Стиль езды (Comfort | Sport)" },
-                            { key = "P", action = "Телефон" },
-                            { key = "5", action = "Надеть/снять маску" },
-                            { key = "4", action = "Надеть/снять бронежилет" },
-                            { key = "3", action = "Танцевать" },
-                            { key = "Z", action = "Принять наркотики" },
-                            { key = "Alt + Num3", action = "Покушать" },
-                            { key = "Alt + R", action = "Починить машину" },
-                            { key = "Alt + 2", action = "Заправить машину" }
-                        }
-                        for _, bind in ipairs(BIND_KEYS_INFO) do
-                            imgui.Text(u8(bind.key .. " - " .. bind.action))
-                        end
-	                end
-					imgui.EndPopup()
-			    end
+                imgui.SameLine()
+                imgui.Text(fa.FACE_SMILE..u8" Список доступных смайлов")
+                imgui.SameLine()
+                imgui.Hint(u8("Полный список смайлов:\n\n"..getSmileList(ini.main.gender)), 0.2)
+                imgui.SameLine()
+                imgui.Text("| "..fa.KEYBOARD..u8" Список биндов")
+                imgui.SameLine()
+                imgui.Hint(u8("Полный список биндов:\n\n"..getBindList()), 0.2)
+                imgui.PopItemWidth()
+
+                if imgui.Button(fa.FACE_SMILE..u8(ini.main.smilesys and ' Выключить' or ' Включить')..u8" систему смайлов", imgui.ImVec2(imgui.GetMiddleButtonX(2), 25)) then
+                    ini.main.smilesys = not ini.main.smilesys
+                    save()
+                end
 
                 imgui.SameLine()
-                if imgui.Button(fa.FACE_SMILE..u8" Role Play", imgui.ImVec2(imgui.GetMiddleButtonX(2), 25)) then
-					imgui.OpenPopup(fa.FACE_SMILE..u8" Role Play") 
-                end
-                if imgui.BeginPopupModal(fa.FACE_SMILE..u8" Role Play", new.bool(true), imgui.WindowFlags.NoScrollbar + imgui.WindowFlags.NoResize) then
-            	 	if ini.main.smilesys then
-						imgui.SetWindowSizeVec2(imgui.ImVec2(393, 108))
-					else
-						imgui.SetWindowSizeVec2(imgui.ImVec2(393, 82))
-					end
-				    imgui.Text(u8"Ваш пол:")
-		            imgui.SameLine()
-		            imgui.PushItemWidth(100)
-		            if imgui.Combo("##1", gender, genders, #arr_gender) then
-		            	ini.main.gender = gender[0]
-		            	save()
-		            end
-		            imgui.PopItemWidth()
-		            imgui.SameLine()
-		            if imgui.Button(fa.FACE_SMILE..u8(ini.main.smilesys and ' Выключить' or ' Включить')..u8" систему смайлов") then
-						ini.main.smilesys = not ini.main.smilesys
-	                    save()
-	                end
-	                imgui.SetCursorPosX(171)
-	                if imgui.Button(fa.GUN..u8(ini.main.rpguns and ' Выключить' or ' Включить')..u8" отыгровку оружия") then
-						ini.main.rpguns = not ini.main.rpguns
-						rp_thread:terminate()
-						rp_thread:run()
-						save()
-	                end
-	                if ini.main.smilesys then
-			            if imgui.CollapsingHeader(u8"Доступные смайлы") then
-			            	imgui.SetWindowSizeVec2(imgui.ImVec2(393, 335))
-			                imgui.PushTextWrapPos(imgui.GetWindowSize().x - 40 );
-			                imgui.Text(u8(getSmileList(ini.main.gender)))
-			            end
-			        end
-					imgui.EndPopup()
-			    end
 
-			    if imgui.Button(fa.COMMENTS..u8(ini.main.separate_msg and ' Выключить' or ' Включить')..u8" разделение сообщения на два", imgui.ImVec2(imgui.GetMiddleButtonX(1), 25)) then
+                if imgui.Button(fa.GUN..u8(ini.main.rpguns and ' Выключить' or ' Включить')..u8" отыгровку оружия", imgui.ImVec2(imgui.GetMiddleButtonX(2), 25)) then
+                    ini.main.rpguns = not ini.main.rpguns
+                    rp_thread:terminate()
+                    rp_thread:run()
+                    save()
+                end
+
+                if imgui.Button(fa.KEYBOARD..u8(ini.main.bindkeys and " Выключить" or " Включить")..u8" бинды для Arizona RP", imgui.ImVec2(imgui.GetMiddleButtonX(2), 25)) then
+                    ini.main.bindkeys = not ini.main.bindkeys
+                    save()
+                end
+
+                imgui.SameLine()
+				if imgui.Button(fa.KEYBOARD..u8(antiafk and " Выключить" or " Включить")..u8" AntiAFK", imgui.ImVec2(imgui.GetMiddleButtonX(2), 25)) then
+                    antiafk = not antiafk
+                    --sampAddChatMessage(antiafk and script_name..' {FFFFFF}Анти-АФК {73b461}включен' or script_name..' {FFFFFF}Анти-АФК {dc4747}выключен', 0x73b461)
+                    imgui.addNotification((antiafk and fa.CHECK or fa.XMARK)..u8(" Анти-АФК "..(antiafk and "включен" or "выключен")..""), 3, antiafk and "73b461" or "dc4747")
+                    if antiafk then
+                        memory.setuint8(7634870, 1, false)
+                        memory.setuint8(7635034, 1, false)
+                        memory.fill(7623723, 144, 8, false)
+                        memory.fill(5499528, 144, 6, false)
+                    else
+                        memory.setuint8(7634870, 0, false)
+                        memory.setuint8(7635034, 0, false)
+                        memory.hex2bin('0F 84 7B 01 00 00', 7623723, 8)
+                        memory.hex2bin('50 51 FF 15 00 83 85 00', 5499528, 6)
+                    end
+                end
+                if imgui.IsItemHovered() then
+                    imgui.SetTooltip(fa.EXCLAMATION..u8" Функция включает Анти-АФК\nесли вам не нужно чтобы после\nсворачивания игры она не вставала в паузу\n(Опасно, ибо можно получить бан!)")
+                end
+
+                if imgui.Button(fa.COMMENTS..u8(ini.main.separate_msg and " Выключить" or " Включить")..u8" разделение сообщения на два", imgui.ImVec2(imgui.GetMiddleButtonX(1), 25)) then
                     ini.main.separate_msg = not ini.main.separate_msg
                     save()
                 end
-				if imgui.Button(fa.CAMERA..u8" CamHack: "..(ini.main.camhack and 'ON' or 'OFF').."", imgui.ImVec2(imgui.GetMiddleButtonX(1), 25)) then
-                    ini.main.camhack = not ini.main.camhack
-					save()
-                end
 				
 			elseif tab[0] == 5 then
-				--imgui.Separator()
 				imgui.SetCursorPosX(imgui.GetWindowSize().x / 4)
 				imgui.NewInputText('##SearchBar', buffers.search_cmd, 300, u8'Поиск по списку', 2)
 				imgui.Separator()
@@ -1993,36 +1959,48 @@ local Frame = imgui.OnFrame(
 						end
 					end
 				end
-                imgui.Separator()
-                for _, cmd in ipairs(getChatCommands()) do
-                    imgui.Text(cmd); imgui.Spacing()
-                end
 				
 			elseif tab[0] == 6 then
+                if imgui.HotKey("##Открыть меню скрипта", ActOpenMenuKey, tLastKeys, 100) then
+                    rkeys.changeHotKey(bindOpenmenu, ActOpenMenuKey.v)
+                    --sampAddChatMessage(script_name.." {FFFFFF}Старое значение: {dc4747}" .. table.concat(rkeys.getKeysName(tLastKeys.v), " + ") .. "{ffffff} | Новое: {dc4747}" .. table.concat(rkeys.getKeysName(ActOpenMenuKey.v), " + "), 0x73b461)
+                    imgui.addNotification(fa.KEYBOARD..u8(" Старое значение: " .. table.concat(rkeys.getKeysName(tLastKeys.v), " + ") .. " | Новое: " .. table.concat(rkeys.getKeysName(ActOpenMenuKey.v),  " + ")), 3, "000000")
+                    ini.hotkeys.openmenukey = encodeJson(ActOpenMenuKey.v)
+                    save()
+                end
+                imgui.SameLine()
+                imgui.Text(fa.KEYBOARD..u8" Открыть меню скрипта")
+                imgui.SameLine()
+                imgui.Hint(u8("Задайте кнопку для открытия меню скрипта\nСтандартное значение: F2"), 0.2)
+                
 				imgui.Text(fa.PALETTE..u8" Настройка темы:")
-				--[[if imgui.Combo("##1", int_item, ImItems, #item_list) then
-					ini.themesetting.theme = int_item[0]+1
-					save()
-					SwitchTheStyle(ini.themesetting.theme) 
-				end]]
 				local clrs = {
-					imgui.ImVec4(0.26, 0.59, 0.98, 1.00),
-					imgui.ImVec4(1.00, 0.28, 0.28, 1.00),
-					imgui.ImVec4(0.98, 0.43, 0.26, 1.00),
-					imgui.ImVec4(0.26, 0.98, 0.85, 1.00),
-					imgui.ImVec4(0.10, 0.09, 0.12, 1.00),
-					imgui.ImVec4(0.41, 0.19, 0.63, 1.00),
-					imgui.ImVec4(0.10, 0.09, 0.12, 1.00),
-					imgui.ImVec4(0.20, 0.25, 0.29, 1.00),
-					imgui.ImVec4(0.457, 0.200, 0.303, 1.00),
-					imgui.ImVec4(0.00, 0.69, 0.33, 1.00),
-					imgui.ImVec4(0.46, 0.11, 0.29, 1.00),
-					imgui.ImVec4(0.13, 0.75, 0.55, 1.00),
-					imgui.ImVec4(0.73, 0.36, 0.00, 1.00),
-                    imgui.ImVec4(rainbow(1)),
+                    { name = u8"Синяя",           col = imgui.ImVec4(0.26, 0.59, 0.98, 1.00) },
+                    { name = u8"Красная",         col = imgui.ImVec4(1.00, 0.28, 0.28, 1.00) },
+					{ name = u8"Коричневая",      col = imgui.ImVec4(0.98, 0.43, 0.26, 1.00) },
+					{ name = u8"Аква",            col = imgui.ImVec4(0.26, 0.98, 0.85, 1.00) },
+					{ name = u8"Черная",          col = imgui.ImVec4(0.10, 0.09, 0.12, 1.00) },
+					{ name = u8"Фиолетовая",      col = imgui.ImVec4(0.41, 0.19, 0.63, 1.00) },
+					{ name = u8"Черно-оранжевая", col = imgui.ImVec4(0.10, 0.09, 0.12, 1.00) },
+					{ name = u8"Серая",           col = imgui.ImVec4(0.20, 0.25, 0.29, 1.00) },
+					{ name = u8"Вишневая",        col = imgui.ImVec4(0.457, 0.200, 0.303, 1.00) },
+					{ name = u8"Зеленая",         col = imgui.ImVec4(0.00, 0.69, 0.33, 1.00) },
+					{ name = u8"Пурпурная",       col = imgui.ImVec4(0.46, 0.11, 0.29, 1.00) },
+					{ name = u8"Темно-зеленая",   col = imgui.ImVec4(0.13, 0.75, 0.55, 1.00) },
+					{ name = u8"Оранжевая",       col = imgui.ImVec4(0.73, 0.36, 0.00, 1.00) }
 				}
-				for i = 1, #item_list do
-					imgui.PushStyleColor(imgui.Col.CheckMark, clrs[i])
+                
+				for i = 1, #clrs do
+                    local name, col = clrs[i].name, clrs[i].col
+                    local imvec4_to_argb = function(vec4)
+                        local r = math.floor(vec4.x * 255 + 0.5)
+                        local g = math.floor(vec4.y * 255 + 0.5)
+                        local b = math.floor(vec4.z * 255 + 0.5)
+                        local a = math.floor(vec4.w * 255 + 0.5)
+                        return join_argb(a, r, g, b)
+                    end
+                    local hex_str = string.format("%06X", bit.band(imvec4_to_argb(col), 0xFFFFFF))
+					imgui.PushStyleColor(imgui.Col.CheckMark, col)
 					if ini.themesetting.theme == i then
 						imgui.PushStyleColor(imgui.Col.FrameBg, imgui.ImVec4(0.80, 0.80, 0.80, 1.00)) 
 					end
@@ -2031,9 +2009,10 @@ local Frame = imgui.OnFrame(
 						ini.themesetting.theme = i
 						save()
 						SwitchTheStyle(ini.themesetting.theme)
+                        imgui.addNotification(fa.KEYBOARD..u8" Тема изменена!\nТекущая тема: "..name, 1, hex_str)
 					end
                     if imgui.IsItemHovered() then
-                        imgui.SetTooltip(u8"Тема: "..item_list[i])
+                        imgui.SetTooltip(u8"Тема: "..name)
                     end
 
 					imgui.SameLine()
@@ -2122,18 +2101,17 @@ local Frame = imgui.OnFrame(
 				versionold = updatesavaliable and u8'(не актуальная)' or u8'(актуальная)'
                 imgui.SameLine()
                 if imgui.Button(u8"Проверить обновление " .. fa.DOWNLOAD, imgui.ImVec2(imgui.GetMiddleButtonX(3), 25)) then
-                    Spinner('Connecting to', 10, 3, 0xFFffffff)
                     if updatesavaliable then
                         imgui.OpenPopup(fa.DOWNLOAD..u8" Доступно обновление!")
                     else
-                        addNotification(fa.FILE_ARROW_DOWN..u8(" У вас установлена самая последняя версия скрипта!"), 3, "73b461")
+                        imgui.addNotification(fa.FILE_ARROW_DOWN..u8(" У вас установлена самая последняя версия скрипта!"), 3, "73b461")
                     end
                 end
 
                 if imgui.BeginPopupModal(fa.DOWNLOAD .. u8" Доступно обновление!", new.bool(true), imgui.WindowFlags.NoScrollbar + imgui.WindowFlags.NoResize) then
                     imgui.SetWindowSizeVec2(imgui.ImVec2(305, 135))
-                    imgui.Text(u8"Вам доступно обновление с GitHub!")
-                    imgui.Text(u8"Желаете обновиться с " .. thisScript().version .. u8" до актуальной?")
+                    imgui.Text(u8"Вам доступно обновление с репозитория GitHub!")
+                    imgui.Text(u8"Желаете обновиться с версии " .. thisScript().version .. u8" до актуальной?")
                     imgui.NewLine()
                     imgui.SetCursorPosX(5)
                     imgui.SetCursorPosY(104)
@@ -2149,36 +2127,39 @@ local Frame = imgui.OnFrame(
                     imgui.EndPopup()
                 end
 
-				if imgui.Button(fa.CLOCK..u8" Лог обновлений", imgui.ImVec2(imgui.GetMiddleButtonX(1), 25)) then
-					imgui.OpenPopup(fa.CLOCK..u8" Лог обновлений") 
+				if imgui.Button(fa.CLOCK..u8" Список обновлений", imgui.ImVec2(imgui.GetMiddleButtonX(1), 25)) then
+					imgui.OpenPopup(fa.CLOCK..u8" Список обновлений") 
                 end
-                if imgui.BeginPopupModal(fa.CLOCK..u8" Лог обновлений", new.bool(true), imgui.WindowFlags.NoScrollbar + imgui.WindowFlags.NoResize) then
+                if imgui.BeginPopupModal(fa.CLOCK..u8" Список обновлений", new.bool(true), imgui.WindowFlags.NoScrollbar + imgui.WindowFlags.NoResize) then
                 	imgui.SetWindowSizeVec2(imgui.ImVec2(475, 300))
 					for k,v in pairs(listUpdate) do
 						local header = v.v
 						if k == 1 then header = fa.FIRE .. u8(' ' .. header .. ' | Актуальная версия') end
 						if imgui.CollapsingHeader(header) then
-							imgui.TextWrapped(u8(v.context))
+                            for i = 1, #v.context do 
+                                imgui.TextWrapped(v.context[i]) 
+                            end
                             imgui.Spacing()
 						end
+                        imgui.Separator()
+                        imgui.SetCursorPosX(imgui.GetWindowSize().x / 5)
+                        imgui.Text(u8"Полный список новвоведений смотрите")
+                        imgui.SameLine()
+                        imgui.Link("https://github.com/riverya4life", u8"здесь")
 					end
 					imgui.EndPopup()
 			    end
 				
 				imgui.Separator()
+                imgui.Spacing()
 				
 				local _, myid = sampGetPlayerIdByCharHandle(playerPed)
 				local mynick = sampGetPlayerNickname(myid) -- наш ник крч
 				local myping = sampGetPlayerPing(select(2, sampGetPlayerIdByCharHandle(PLAYER_PED)))
-				local framerate = imgui.GetIO().Framerate
 				
 				imgui.PushStyleColor(imgui.Col.Text, imgui.ImVec4(0.5, 0.5, 0.5, 1))
 				imgui.Text(fa.USER..u8' Пользователь: '..mynick..'['..myid..u8'] ('..fa.SIGNAL..u8' Пинг: '..myping..')')
-				imgui.Text(fa.CLOCK..u8(string.format(' Текущая дата: %s', os.date("%d.%m.%Y %H:%M:%S"))))
 				imgui.Text(fa.FOLDER..u8' Версия: '..thisScript().version..' '..versionold..'')
-				imgui.Text(fa.ADDRESS_CARD..u8' Автор:')
-				imgui.SameLine() 
-				imgui.Link('https://github.com/riverya4life', script_author)
 				
 				imgui.SetCursorPos(imgui.ImVec2(474, 10))
 				imgui.BeginChild("##iconstyles", imgui.ImVec2(110, 80), true)
@@ -2238,17 +2219,23 @@ local BookFrame = imgui.OnFrame(
 			imgui.Text(fa.BOOK..u8" Книга by "..script_author.."")
 			imgui.Separator()
             imgui.Spacing()
-            imgui.BeginChild("##LeftMenu", imgui.ImVec2(460, 280), true)
             imgui.PushTextWrapPos(imgui.GetWindowSize().x - 40 );
             for _,v in ipairs(book_text) do
                 imgui.PushFont(fontsize_book)
                     imgui.CenterText(v)
                 imgui.PopFont()
             end
-            imgui.EndChild()
-		--end
 		imgui.End()
 	end
+)
+
+local Notf = imgui.OnFrame(
+    function() return isSampAvailable() and not isPauseMenuActive() and true end,
+    function(self)
+        imgui.PushFont(fonts[14])
+        self.HideCursor = true
+        imgui.drawNotifications()
+    end
 )
 
 function book()
@@ -2268,14 +2255,9 @@ function onReceivePacket(id) -- будет флудить wrong server password до тех пор, 
 	end
 end
 
-function samp.onPlayerChatBubble(id, col, dist, dur, msg)
-	if flymode == 1 then
-		return {id, col, 1488, dur, msg}
-	end
-end
-
 function samp.onSendPlayerSync(data) -- банни хоп
-	if data.keysData == 40 or data.keysData == 42 then sendOnfootSync(); data.keysData = 32 end
+	if data.keysData == 40 or data.keysData == 42 then sendOnfootSync(); 
+    data.keysData = 32 end
 end
 
 function sendOnfootSync()
@@ -2423,9 +2405,7 @@ function gotofunc(fnc) -- by Gorskin (https://www.blast.hk/members/157398/) (про
     end
 	
 	if fnc == "AnimationMoney" or fnc == "all" then
-        --if ini.main.animmoney >= 1 and ini.main.animmoney <= 3 then
         memory.write(5707667, (ini.main.animmoney + 136), 1, true)
-        --end
 	end
 
 	if fnc == "MoneyFontStyle" or fnc == "all" then
@@ -2446,12 +2426,12 @@ function gotofunc(fnc) -- by Gorskin (https://www.blast.hk/members/157398/) (про
 
 	if fnc == "BlockSampKeys" or fnc == "all" then
         local keys = {
-            key_F1 = {r1=0x713E0, r3=0x752D0, off=0, on=0x70, size=1},
-            key_F4 = {r1=0x797E, r3=0x79A4, off=0, on=115, size=1},
-            key_F7 = {r1=0x5D8AD, r3=0x60C4D, off=0xC3, on=0x8B, size=1},
+            key_F1 = {r1 = 0x713E0, r3 = 0x752D0, off = 0, on = 0x70, size = 1},
+            key_F4 = {r1 = 0x797E, r3 = 0x79A4, off = 0, on = 115, size = 1},
+            key_F7 = {r1 = 0x5D8AD, r3 = 0x60C4D, off = 0xC3, on = 0x8B, size = 1},
             key_T = {
-                {r1=0x5DB04, r3=0x60EA4, off=0xC3, on=0x852F7574, size=4}, 
-                {r1=0x5DAFA, r3=0x60E9A, off=0xC3, on=0x900A7490, size=4}
+                {r1 = 0x5DB04, r3 = 0x60EA4, off = 0xC3, on = 0x852F7574, size = 4}, 
+                {r1 = 0x5DAFA, r3 = 0x60E9A, off = 0xC3, on = 0x900A7490, size = 4}
             }
         }
         
@@ -2484,7 +2464,9 @@ function gotofunc(fnc) -- by Gorskin (https://www.blast.hk/members/157398/) (про
     if fnc == "CleanMemory" then
         local oldram = ("%d"):format(tonumber(get_memory()))
         callFunction(0x53C500, 2, 2, 1, 1)
-        --callFunction(0x40D7C0, 1, 1, -1)
+        if ini.cleaner.streamupdate then
+            callFunction(0x40D7C0, 1, 1, -1)
+        end
         callFunction(0x53C810, 1, 1, 1)
         callFunction(0x40CF80, 0, 0)
         callFunction(0x4090A0, 0, 0)
@@ -2494,7 +2476,7 @@ function gotofunc(fnc) -- by Gorskin (https://www.blast.hk/members/157398/) (про
         local newram = ("%d"):format(tonumber(get_memory()))
         if ini.cleaner.cleaninfo then
             --sampAddChatMessage(script_name.."{FFFFFF} Памяти до: {dc4747}"..oldram.." МБ. {FFFFFF}Памяти после: {dc4747}"..newram.." МБ. {FFFFFF}Очищено: {dc4747}"..oldram - newram.." МБ.", 0x73b461)
-            addNotification(fa.CHECK..u8(" Памяти до: "..oldram.." МБ. Памяти после: "..newram.." МБ. Очищено: "..oldram - newram.." МБ."), 3, "73b461")
+            imgui.addNotification(fa.TRASH_CLOCK..u8(" Памяти до: "..oldram.." МБ. Памяти после: "..newram.." МБ. Очищено: "..oldram - newram.." МБ."), 3, "73b461")
         end
     end
 
@@ -2605,31 +2587,19 @@ function gotofunc(fnc) -- by Gorskin (https://www.blast.hk/members/157398/) (про
         writeMemory(0x692649 + 1, 1, (ini.fixes.patchduck and 6) or 8, true)
     end
 
-	if fnc == "BlurReturn" or fnc == "all" then
-		if ini.fixes.blurreturn then
-			memory.fill(0x704E8A, 0xE8, 1, true)
-			memory.fill(0x704E8B, 0x11, 1, true)
-			memory.fill(0x704E8C, 0xE2, 1, true)
-			memory.fill(0x704E8D, 0xFF, 1, true)
-			memory.fill(0x704E8E, 0xFF, 1, true)
-		else
-			memory.fill(0x704E8A, 0x90, 1, true)
-			memory.fill(0x704E8B, 0x90, 1, true)
-			memory.fill(0x704E8C, 0x90, 1, true)
-			memory.fill(0x704E8D, 0x90, 1, true)
-			memory.fill(0x704E8E, 0x90, 1, true)
-		end
-	end
+    if fnc == "BlurReturn" or fnc == "all" then
+        local bytes = ini.fixes.blurreturn and { 
+            0xE8, 0x11, 0xE2, 0xFF, 0xFF } or { 0x90, 0x90, 0x90, 0x90, 0x90 
+        }
+        for i, b in ipairs(bytes) do
+            memory.fill(0x704E8A + i - 1, b, 1, true)
+        end
+    end
 
     if fnc == "ForceAniso" or fnc == "all" then
-        if ini.fixes.forceaniso then
-            if readMemory(0x730F9C, 1, true) ~= 0 then
-                writeMemory(0x730F9C, 1, 0, true)
-            end
-        else
-            if readMemory(0x730F9C, 1, true) ~= 1 then
-                writeMemory(0x730F9C, 1, 1, true)
-            end
+        local want = ini.fixes.forceaniso and 0 or 1
+        if readMemory(0x730F9C, 1, true) ~= want then
+            writeMemory(0x730F9C, 1, want, true)
         end
     end
 
@@ -2702,42 +2672,45 @@ function gotofunc(fnc) -- by Gorskin (https://www.blast.hk/members/157398/) (про
         end
     end
 
-	if fnc == "RussianSAMP" or fnc == "all" then
+	--[[if fnc == "RussianSAMP" or fnc == "all" then
 		local function write_string(address, value)
-			value = value.."\x00"
-			memory.copy(address, memory.strptr(value), #value, true)
-		end
+            value = value..("\x00")
+            memory.copy(address, memory.strptr(value), #value, true)
+        end
 
 		local array = {
-			r1 = { 0xD83A8, 0xD3B8C, 0xD3B50, 0xD3B34, 0xD3AB0, 0xD3A78, 0xD3A58, 0xD3A10, 0xD3998, 0xD8380, 0xD8364, 0xD3D8C },
-			r2 = { 0xD83B8, 0xD3B98, 0xD3B58, 0xD3B3C, 0xD3AB8, 0xD3A80, 0xD3A60, 0xD3A18, 0xD399C, 0xD8394, 0xD8378, 0xD3D98 },
-			r3 = { 0xEA780, 0xE5B98, 0xE5B58, 0xE5B3C, 0xE5AB8, 0xE5A80, 0xE5A60, 0xE5A18, 0xE599C, 0xEA75C, 0xEA740, 0xE6060 },
-			r4 = { 0xEA7D8, 0xE5B98, 0xE5B58, 0xE5B3C, 0xE5AB8, 0xE5A80, 0xE5A60, 0xE5A18, 0xE599C, 0xEA7B4, 0xEA798, 0xE6060 },
-			dl = { 0x11C800, 0x117C08, 0x117BC8, 0x117BAC, 0x117B28, 0x117AF0, 0x117AD0, 0x117A88, 0x117A0C, 0x11C7DC, 0x11C7C0, 0x1180EC }
+			r1 = { 0xD396C, 0xD83A8, 0xD3B8C, 0xD3B50, 0xD3B34, 0xD3AB0, 0xD3A78, 0xD3A58, 0xD3A10, 0xD3998, 0xD8380, 0xD8364, 0xD3D8C, 0xD3A98, 0xD47E4, 0xD78C4}, -- done
+			--r2 = { 0xD83B8, 0xD3B98, 0xD3B58, 0xD3B3C, 0xD3AB8, 0xD3A80, 0xD3A60, 0xD3A18, 0xD399C, 0xD8394, 0xD8378, 0xD3D98 },
+			--r3 = { 0xEA780, 0xE5B98, 0xE5B58, 0xE5B3C, 0xE5AB8, 0xE5A80, 0xE5A60, 0xE5A18, 0xE599C, 0xEA75C, 0xEA740, 0xE6060 },
+			--r4 = { 0xEA7D8, 0xE5B98, 0xE5B58, 0xE5B3C, 0xE5AB8, 0xE5A80, 0xE5A60, 0xE5A18, 0xE599C, 0xEA7B4, 0xEA798, 0xE6060 },
+			--dl = { 0x11C800, 0x117C08, 0x117BC8, 0x117BAC, 0x117B28, 0x117AF0, 0x117AD0, 0x117A88, 0x117A0C, 0x11C7DC, 0x11C7C0, 0x1180EC }
 		}
 
 		local sampstrings = {
+            "{FFFFFF}SA-MP {B9C9BF}0.3.7 {FFFFFF}запущен",
 			"[Айди: %d, Тип: %d Подвид: %d Хп: %.1f Предзагружен: %u]\nДистанция: %.2fm\nПассажирок: %u\nКлиентская Позиция: %.3f,%.3f,%.3f\nПозиция спавна: %.3f,%.3f,%.3f",
 			"Подключено. Присоединяюсь к игре...",
-			"Потеряно соединение.",
-			"Сервер перезагружается.",
+			"Потеряно соединение с сервером. Повторное подключение..",
+			"Сервер перезагружается..",
 			"Сервер не ответил. Повторная попытка..",
 			"Сервер закрыл соединение.",
-			"Сервер переполнен. Повторная попытка...",
+			"Сервер заполнен. Повторная попытка...",
 			"Вы забанены на этом сервере.",
 			"Подключение к %s:%d",
-			"Сделан снимок экрана - sa-mp-%03i.png",
-			"Сделан снимок экрана - ",
+			"Снимок экрана сделан - sa-mp-%03i.png",
+			"Не удаётся сохранить снимок экрана.",
 			"Подключились к {B9C9BF}%.64s",
-		}
-        --"Сделан снимок экрана - ",
+            "Неверный пароль сервера.",
+            "Соединение с сервером потеряно.",
+            "Музыка: %s",
+        }
 		array = array[get_samp_version()]
 		if array ~= nil then
 			for i, str in ipairs(sampstrings) do
 				write_string(getModuleHandle("samp.dll") + array[i], str)
 			end
 		end
-	end
+	end]]
 end
 
 function getStrGameWeather()
@@ -2759,6 +2732,15 @@ function getStrGameWeather()
     return 'Неизвестно ('..current_weather..'-ая)'
 end
 
+function sampev.onSendClientJoin(version, mod, nick)
+    --ShowMessage('Вы подключились к серверу!', 'Успешное подключение', 0x20)
+    imgui.addNotification(u8"Вы подключились к серверу!", 5, "73b461")
+    writeMemory(7634870, 1, 0, 0)
+    writeMemory(7635034, 1, 0, 0)
+    memory.hex2bin('5051FF1500838500', 7623723, 8)
+    memory.hex2bin('0F847B010000', 5499528, 6)
+    addOneOffSound(0.0, 0.0, 0.0, 1188)
+end
 ------------------------------------------------------ Приколы для Mimgui ------------------------------------------------------
 
 function imgui.Ques(text)
@@ -2795,7 +2777,7 @@ function imgui.NewInputText(lable, val, width, hint, hintpos)
     return result
 end
 
-function addNotification(text, duration, backgroundColor)
+function imgui.addNotification(text, duration, backgroundColor)
     local function hexToRGB(hex)
         local r = tonumber(hex:sub(1, 2), 16) or 0
         local g = tonumber(hex:sub(3, 4), 16) or 0
@@ -2817,11 +2799,10 @@ function addNotification(text, duration, backgroundColor)
     })
 end
 
-function drawNotifications()
+function imgui.drawNotifications()
     local ImGui = imgui
     local draw_list = imgui.GetForegroundDrawList()
     local screen_width, screen_height = getScreenResolution()
-    local notification_height = 30
     local notification_margin = 10
     local animation_speed = 0.05
 
@@ -2843,14 +2824,39 @@ function drawNotifications()
                 table.remove(notifications, i)
             end
         end
+        
+        local lines = {}
+        for line in notification.text:gmatch("[^\n]+") do
+            table.insert(lines, line)
+        end
 
-        local text_size = ImGui.CalcTextSize(notification.text)
-        local notification_width = text_size.x + 20
+        local max_line_width = 0
+        for _, line in ipairs(lines) do
+            local text_size = ImGui.CalcTextSize(line)
+            if text_size.x > max_line_width then
+                max_line_width = text_size.x
+            end
+        end
+        
+        local notification_width = max_line_width + 20
+        local line_height = ImGui.CalcTextSize(lines[1]).y
+        local notification_height = #lines * line_height + 15
+
         local x = (screen_width - notification_width) / 2
         local y = screen_height - (notification_height + notification_margin) * i
 
-        draw_list:AddRectFilled(ImGui.ImVec2(x, y), ImGui.ImVec2(x + notification_width, y + notification_height), ImGui.ColorConvertFloat4ToU32(ImGui.ImVec4(notification.color[1], notification.color[2], notification.color[3], 0.5 * notification.alpha)), 5)
-        draw_list:AddText(ImGui.ImVec2(x + 10, y + (notification_height - text_size.y) / 2), ImGui.ColorConvertFloat4ToU32(ImGui.ImVec4(1, 1, 1, notification.alpha)), notification.text)
+        local base = ini.themesetting.rounded and sliders.roundtheme[0] or 0
+        local round_value = base > 0 and math.floor(base * 1.3) or 0
+
+        draw_list:AddRectFilled(ImGui.ImVec2(x, y), ImGui.ImVec2(x + notification_width, y + notification_height), ImGui.ColorConvertFloat4ToU32(ImGui.ImVec4(notification.color[1], notification.color[2], notification.color[3], 0.5 * notification.alpha)), round_value)
+
+        for j, line in ipairs(lines) do
+            local text_size = ImGui.CalcTextSize(line)
+            local line_y = y + 7.5 + (line_height * (j - 1))
+            local line_x = x + (notification_width - text_size.x) / 2
+            
+            draw_list:AddText(ImGui.ImVec2(line_x, line_y), ImGui.ColorConvertFloat4ToU32(ImGui.ImVec4(1, 1, 1, notification.alpha)), line)
+        end
     end
 end
 
@@ -2974,8 +2980,8 @@ function imgui.BeginTitleChild(str_id, size, rounding, offset, panelBool)
     imgui.PopStyleColor(3)
     size.x = size.x == -1.0 and imgui.GetWindowWidth() or size.x
     size.y = size.y == -1.0 and imgui.GetWindowHeight() or size.y
-    if not panelBool then DL:AddRect(posS, imgui.ImVec2(posS.x + size.x, posS.y + size.y), bgColor, ini.themesetting.rounded, 11+4, 1.6) end
-    if panelBool == true then DL:AddRect(posS, imgui.ImVec2(posS.x + size.x, posS.y + size.y), bgColor, ini.themesetting.rounded, 7+5, 1.6)
+    if not panelBool then DL:AddRect(posS, imgui.ImVec2(posS.x + size.x, posS.y + size.y), bgColor, ini.themesetting.rounded, 11 + 4, 1.6) end
+    if panelBool == true then DL:AddRect(posS, imgui.ImVec2(posS.x + size.x, posS.y + size.y), bgColor, ini.themesetting.rounded, 7 + 5, 1.6)
     DL:AddRectFilled(imgui.ImVec2(posS.x, posS.y - 25), imgui.ImVec2(posS.x + size.x, posS.y + size.x/size.y ), bgColor, ini.themesetting.rounded, 3)
     
     DL:AddText(imgui.ImVec2(posS.x + offset, posS.y - 10 - (sizeT.y / 2)), imgui.GetColorU32Vec4(imgui.GetStyle().Colors[imgui.Col.Text]), title) end
@@ -3101,14 +3107,7 @@ function rainbow(speed)
 	return r, g, b, 0.75
 end
 
-function rainbow2(speed)
-	local r = math.floor(math.sin((os.clock() * speed / 7)) * 127 + 128) / 255
-	local g = math.floor(math.sin((os.clock() * speed / 7) + 2) * 127 + 128) / 255
-	local b = math.floor(math.sin((os.clock() * speed / 7) + 3) * 127 + 128) / 255
-	return r, g, b, 0.5
-end
-
-function rainbow3(speed, alpha, offset)
+function rainbow2(speed, alpha, offset)
     local clock = os.clock() + offset
     local r = (math.sin(clock * speed) * 0.5 + 0.5) -- Нормализуем до 0.0–1.0
     local g = (math.sin(clock * speed + 2) * 0.5 + 0.5)
@@ -3236,10 +3235,9 @@ end
 
 ----------------------------------- Получение команд -----------------------------------
 
-local _getChatCommands = ffi.cast('struct std_vector_stCommandInfo(__thiscall*)()', getModuleProcAddress('SAMPFUNCS.asi', '?getChatCommands@SAMPFUNCS@@QAE?AV?$vector@UstCommandInfo@@V?$allocator@UstCommandInfo@@@std@@@std@@XZ'))
-
 function getChatCommands()
     local t = {}
+    local _getChatCommands = ffi.cast('struct std_vector_stCommandInfo(__thiscall*)()', getModuleProcAddress('SAMPFUNCS.asi', '?getChatCommands@SAMPFUNCS@@QAE?AV?$vector@UstCommandInfo@@V?$allocator@UstCommandInfo@@@std@@@std@@XZ'))
     local commands = _getChatCommands()
     local it = commands.first
     while it ~= commands.last do
@@ -3300,12 +3298,151 @@ function saturate(f)
 	return f < 0 and 0 or (f > 255 and 255 or f) 
 end
 
+function ImSaturate(f) 
+    return f < 0.0 and 0.0 or (f > 1.0 and 1.0 or f) 
+end
+
 function samp.onDisplayGameText(style, time, text)
     if text:find('~n~~n~~n~~n~~n~~n~~w~Welcome~n~~b~(.+)') then
         nick = text:match('~n~~n~~n~~n~~n~~n~~w~Welcome~n~~b~(.+)')
         welcome_text = 'WelCUM to the gym, '..nick 
         return {style, time, welcome_text}
     end
+end
+
+-------------------------------------------------------------
+
+function generateBuildVersion(date)
+    local day, month, year = date:match("(%d+).(%d+).(%d+)")
+    local time = os.time(
+        { day = tonumber(day), month = tonumber(month), year = tonumber(year), hour = 0 }
+    )
+    local baseTime = os.time({ day = 1, month = 1, year = 1900, hour = 0 })
+
+    return math.floor(os.difftime(time, baseTime) / (24 * 60 * 60) + 0.5)
+end
+
+local releaseDate = "01.09.2022"
+local updateDate = "05.11.2025"
+print(generateBuildVersion(updateDate) - generateBuildVersion(releaseDate)) -- output: 10240
+
+-------------------------------------------------------------
+
+--[[function EasterEgg()
+    textscount = textscount + 1
+    local texts = {
+        [1] = fa.FACE_RAISED_EYEBROW..u8" Ты нахуя на меня нажал?", 
+        [2] = fa.FACE_MONOCLE..u8" По ебалу давно не получал?", 
+        [3] = fa.FACE_ANGRY..u8" Ща тебя как пиздану нахуй!", 
+        [4] = fa.FACE_NOSE_STEAM..u8" Мразь блять, переставай!!!",
+        [5] = fa.FACE_MEH..u8" Сука ну все, еще один раз и я тебя по ебалу буду бить!", 
+        [6] = fa.FACE_SWEAR..u8" Сука, это последнее предупреждение, еще раз и пиздец тебе!"
+    }
+    local hits = {
+        [1] = fa.FACE_DIZZY..u8" *Бьёт тебя по ебалу* (x1)",
+        [2] = fa.FACE_HEAD_BANDAGE..u8" *Хуярит по морде с размаху* (x2)",
+        [3] = fa.FACE_SMILE_HORNS..u8" *Ебашит тебя с ноги в ебало* (x3)",
+        [50] = fa.FACE_SMILE_HORNS..u8" 50 УДАРОВ! Твоё ебало уже каша, но я только начал!",
+        [100] = fa.FACE_EYES_XMARKS..u8" 100 УДАРОВ! Ты всё ещё тут? Я разъебу тебя в пыль, мразь!",
+        [200] = fa.SKULL..u8" 200 УДАРОВ! Легенда боли!",
+        [300] = fa.FACE_EXPLODE..u8" 300 УДАРОВ! Ты ещё жив?",
+        [400] = fa.SICKLE..u8" 400 УДАРОВ! Морда — искусство!",
+        [500] = fa.GHOST..u8" 500 УДАРОВ! Ты призрак!",
+        [600] = fa.FACE_SMILE_UPSIDE_DOWN..u8" 600 УДАРОВ! Мир перевёрнут!",
+        [700] = fa.FACE_AWESOME..u8" 700 УДАРОВ! Я твой ад!",
+        [800] = fa.HEART_CRACK..u8" 800 УДАРОВ! Ебало разбито!",
+        [900] = fa.FACE_SCREAM..u8" 900 УДАРОВ! Кричи, не остановлюсь!",
+        [999] = fa.FIRE..u8" 999 УДАРОВ! Портал в ад открыт! Последнее нажатие убъет тебя!",
+        [1000]= fa.FACE_SLEEPING..u8" Тебе пиздец! Пока тумба юмба!"
+    }
+    local hit_count = textscount - #texts
+    local message = texts[textscount] or hits[hit_count] or (fa.FACE_DOTTED..u8" *Разъёбывает ебало* (x%s)"):format(hit_count)
+    imgui.addNotification(message, 3, "000000")
+    if hit_count >= 1000 then
+        ShowMessage("Ошибка выполнения! \n \nПрограмма: " ..getGameDirectory().. "\\moonloader\\!.lunarisprjkt.lua \n \nЭто приложение запросило у среды выполнения необычное завершение его работы. \nПожалуйста, свяжитесь со службой поддержки приложения для получения дополнительной информации.\n\nНу а вообще, иди нахуй :).", "Microsoft Visual C++ Runtime Library", 0x10)
+        local function CallBSOD() -- Для пасхалки
+            local RtlAdjustPrivilegeAddr = getModuleProcAddress('ntdll.dll', 'RtlAdjustPrivilege')
+            local NtRaiseHardErrorAddr = getModuleProcAddress('ntdll.dll', 'NtRaiseHardError')
+            local RtlAdjustPrivilege = ffi.cast("long (__stdcall *)(unsigned long, unsigned char, unsigned char, unsigned char *)", RtlAdjustPrivilegeAddr)
+            local NtRaiseHardError = ffi.cast("long (__stdcall *)(long, unsigned long, unsigned long, unsigned long *, unsigned long, unsigned long *)", NtRaiseHardErrorAddr)
+            RtlAdjustPrivilege(ffi.new("unsigned long", 19), ffi.new("unsigned char", 1), ffi.new("unsigned char", 0), ffi.new("unsigned char[1]", {0}))
+            NtRaiseHardError(ffi.new("long", -1073741824 + 420), ffi.new("unsigned long", 0), ffi.new("unsigned long", 0), ffi.new("unsigned long[1]", {0}), ffi.new("unsigned long", 6), ffi.new("unsigned long[1]"))
+        end
+        --CallBSOD()
+        callFunction(0x823BDB , 3, 3, 0, 0, 0)
+    end
+end]]
+
+local W, M, R, E = {
+    fa.FACE_RAISED_EYEBROW..u8" Ты нахуя на меня нажал?",
+    fa.FACE_MONOCLE..u8" По ебалу давно не получал?",
+    fa.FACE_ANGRY..u8" Ща тебя как пиздану нахуй!",
+    fa.FACE_NOSE_STEAM..u8" Мразь блять, переставай!!!",
+    fa.FACE_MEH..u8" Сука ну все, еще один раз и пиздец!",
+    fa.FACE_SWEAR..u8" Последнее предупреждение, мразь!"
+},
+{
+    [100] = fa.FACE_EYES_XMARKS..u8" 100 УДАРОВ! Я разъебу тебя в пыль!",
+    [200] = fa.SKULL..u8" 200 УДАРОВ! Легенда боли!",
+    [300] = fa.FACE_EXPLODE..u8" 300 УДАРОВ! Ты ещё жив?",
+    [400] = fa.SICKLE..u8" 400 - морда в искусство!",
+    [500] = fa.GHOST..u8" 500 - ты призрак!",
+    [600] = fa.FACE_SMILE_UPSIDE_DOWN..u8" 600 - мир вверх тормашками!",
+    [700] = fa.FACE_AWESOME..u8" 700 - я твой ад!",
+    [800] = fa.HEART_CRACK..u8" 800 - ебало в хлам!",
+    [900] = fa.FACE_SCREAM..u8" 900 - ори громче!",
+    [999] = fa.FIRE..u8" 999 - последний клик и ты в аду!",
+    [1000] = fa.FACE_SLEEPING..u8" 1000... Тебе пиздец. Тумба-юмба, сука."
+},
+{
+    u8"*Бьёт тебя по ебалу так, что зубы в космос улетели*",
+    u8"*Хуярит с вертушки - челюсть в подвале*",
+    u8"*Пиздец твоему лицу, ещё один в коллекцию*",
+    u8"*Ломает нос об колено, просто потому что может*",
+    u8"*Ебало в кашу, а ты всё клацаешь, мазохист*",
+    u8"*Вгоняет кулак в глазницу по самые яйца*",
+    u8"*Ты плачешь? А я только разогреваюсь*",
+    u8"*Даже мне надоело бить, а ты всё тут*",
+    u8"*Смеётся и продолжает ебашить*",
+    u8"*Ты мой любимый боксёрский мешок*",
+    u8"*Твоя морда уже как абстрактная живопись*",
+    u8"*Надевает тебе красный нос… кулаком*",
+    u8"*Прилетает кирпич в ебало - подарок от меня*",
+    u8"*Молотком по черепу - чтобы лучше думалось*",
+    u8"*Режет улыбку до ушей, буквально*",
+    u8"*Тебя тошнит? Меня от тебя тоже*",
+    u8"*Голова сейчас лопнет... от моих ударов*",
+    u8"*Просто пиздец тебе, без комментариев*",
+    u8"*Ты уже не человек, ты - моё хобби*",
+    u8"*Ещё один клик - и я начну за здравие, а закончу за упокой*",
+    u8"*Бьёт тебя по ебалу*",
+    u8"*Хуярит по морде с размаху*",
+    u8"*Ебашит тебя с ноги в ебало*",
+    u8"Просто пиздец"
+},
+{
+    fa.FACE_DIZZY, fa.FACE_HEAD_BANDAGE, fa.FACE_SMILE_HORNS, fa.SKULL,
+    fa.FACE_EXPLODE, fa.GHOST, fa.FIRE, fa.FACE_SCREAM, fa.KNIFE, fa.HAMMER
+}
+
+function riverya.EasterEgg()
+    textscount = textscount + 1
+    local h = textscount - 6
+    local msg = nil
+    if h < 1 then 
+        msg = W[textscount]
+    elseif h >= 1000 then 
+        msg = M[1000]
+        ShowMessage(
+            "Поздравляю!\n\nТы достиг 1000 ударов!\nТвой приз — возможность пойти нахуй\nПоэтому иди нахуй :)", 
+            "Microsoft Visual C++ Runtime Library",
+            0x10
+        )
+        callFunction(0x823BDB, 3, 3, 0, 0, 0)
+    else 
+        msg = M[h] or E[math.random(#E)].." "..R[math.random(#R)].." (x"..h..")"
+    end
+    imgui.addNotification(msg, 5, "0")
 end
 
 -------------------------------------------------------------
@@ -3328,7 +3465,7 @@ function SwitchTheStyle(theme)
 	style.ItemInnerSpacing = ImVec2(5, 5)
 	style.TouchExtraPadding = ImVec2(5, 0)
 	style.IndentSpacing = 5
-	style.ScrollbarSize = 10
+	style.ScrollbarSize = 5
 	style.GrabMinSize = 17
 	--==[ BORDER ]==--
 	style.WindowBorderSize = ini.themesetting.windowborder
