@@ -3,8 +3,8 @@ assert(getMoonloaderVersion() ~= "026", ("%s requires MoonLoader v0.26 or higher
 
 script_name = "[LunarisPrjkt]"
 script_author = "riverya4life."
-script_version(0.90)
-script_version_number(0.90)
+script_version(0.96)
+script_version_number(0.96)
 script_properties("work-in-pause")
 
 --==================================== [ Information for Users or scripters ] ====================================--
