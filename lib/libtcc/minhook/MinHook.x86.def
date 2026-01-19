@@ -1,0 +1,15 @@
+LIBRARY MinHook.x86.dll
+
+EXPORTS
+MH_ApplyQueued
+MH_CreateHook
+MH_CreateHookApi
+MH_CreateHookApiEx
+MH_DisableHook
+MH_EnableHook
+MH_Initialize
+MH_QueueDisableHook
+MH_QueueEnableHook
+MH_RemoveHook
+MH_StatusToString
+MH_Uninitialize
